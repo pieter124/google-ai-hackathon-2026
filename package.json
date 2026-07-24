@@ -1,0 +1,11 @@
+{
+  "name": "mock-interview-agent",
+  "version": "1.0.0",
+  "description": "Live coding-interview practice tool with an AI interviewer (voice, real code editor, sandboxed test execution). No build step: plain ES modules, React/CodeMirror loaded from CDN.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes serve . -l 8000"
+  },
+  "license": "UNLICENSED"
+}
