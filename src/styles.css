@@ -63,10 +63,10 @@ select, input[type="text"] {
 .btn-small { padding: 6px 10px; font-size: 13px; }
 .btn-ghost { background: transparent; }
 .btn-wrapup {
-  align-self: flex-end;
   background: transparent;
   border-color: var(--fail);
   color: var(--fail);
+  white-space: nowrap;
 }
 .btn-start { margin-top: 8px; }
 
@@ -202,6 +202,68 @@ select, input[type="text"] {
 .test-result.fail { border-color: rgba(255, 107, 107, 0.4); background: rgba(255, 107, 107, 0.08); }
 .test-detail { color: var(--text-muted); word-break: break-word; }
 
+/* ---------- Panel-right header: avatar orb + session countdown + wrap-up ---------- */
+.panel-right-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.avatar-orb {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+}
+.avatar-orb-active { border-color: var(--accent); }
+.avatar-orb-core {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, var(--accent-hover), var(--accent));
+  opacity: 0.7;
+  transform: scale(1);
+}
+.session-countdown {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text-muted);
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+
+/* ---------- Criteria matrix (live) ---------- */
+.criteria-matrix {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.criteria-matrix h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.criteria-row { display: flex; flex-direction: column; gap: 4px; }
+.criteria-label-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 13.5px; }
+.criteria-label { color: var(--text); }
+.criteria-score { color: var(--text-muted); font-family: var(--mono); font-size: 12.5px; }
+.criteria-bar { display: flex; gap: 4px; }
+.criteria-dot {
+  width: 16px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+}
+.criteria-dot.filled { background: var(--accent); border-color: var(--accent); }
+.criteria-note { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+
 .voice-control { display: flex; justify-content: center; }
 .mic-btn {
   width: 100%;
@@ -290,6 +352,12 @@ select, input[type="text"] {
 .scorecard-block ul { margin: 0; padding-left: 20px; line-height: 1.6; }
 .big-stat { font-size: 22px; font-weight: 700; margin: 2px 0 6px !important; }
 .verdict-block { background: var(--panel-alt); border-radius: 10px; padding: 16px 18px; }
+
+.final-criteria-list { display: flex; flex-direction: column; gap: 14px; }
+.final-criteria-row { display: flex; flex-direction: column; gap: 2px; }
+.final-criteria-row .criteria-label { font-weight: 600; }
+.final-criteria-row .criteria-score { font-family: var(--mono); color: var(--text-muted); margin-left: 8px; }
+.final-criteria-row .criteria-note { margin: 2px 0 0; color: var(--text-muted); line-height: 1.5; font-size: 13.5px; }
 
 @media (max-width: 900px) {
   .interview-layout { grid-template-columns: 1fr; }

@@ -1,79 +1,88 @@
-// ---------------------------------------------------------------------------
-// Single source of truth for the Google API key used by all three direct
-// client calls (Gemini, Speech-to-Text, Text-to-Speech). No backend, so this
-// key must be restricted (in Google Cloud Console) to exactly those 3 APIs
-// and, ideally, to your demo's HTTP referrer.
-// ---------------------------------------------------------------------------
-export const GOOGLE_API_KEY = "PLACEHOLDER_API_KEY"; // replace with your own key, restricted to these 3 APIs
-
-// Model used for every Gemini call (interview turns + scorecard). Kept as a
-// single constant so it's a one-line change if the model name shown here
-// ever gets deprecated in favor of a newer one.
-export const GEMINI_MODEL = "gemini-2.5-flash";
+import { pickWeighted } from "./utils/weightedRandom.js";
 
 // ---------------------------------------------------------------------------
-// Interviewer personas. `description` is what actually gets fed to Gemini as
-// the persona instruction; `label` is what shows up in the setup dropdown.
+// Every Google call (Gemini reasoning, Gemini native audio-out, and the
+// Speech-to-Text fallback used only when Gemini's audio-understanding input
+// rejects the browser's recording format) goes through this app's own
+// backend (server/server.js) instead of straight to Google. The server
+// authenticates upstream via Application Default Credentials, so no API key
+// lives in client-side source anymore — the model names below are just
+// passed through to tell the backend which model to call.
+// ---------------------------------------------------------------------------
+
+// Model used for reasoning calls (interview turns, checkpoints, scorecard).
+export const GEMINI_MODEL = "gemini-3.6-flash";
+
+// ---------------------------------------------------------------------------
+// Interviewer personas — the "difficulty persona" dial from the spec.
+// `description` is what actually gets fed to Gemini as the persona
+// instruction; `label` is what shows up in the setup dropdown.
 // ---------------------------------------------------------------------------
 export const PERSONAS = [
   {
-    id: "tech-lead",
-    label: "Technical Lead (skeptical, terse)",
+    id: "supportive",
+    label: "Supportive",
     description:
-      "a skeptical, terse technical lead. You speak in short sentences, rarely offer praise, and push hard on edge cases, correctness, and complexity. You expect the candidate to justify every design choice.",
+      "a supportive, encouraging interviewer. You give the candidate room to think out loud, offer warmth when they're stuck, and favor escalating, non-bottom-out hints — start vague, and only get more concrete if they're still stuck after trying.",
   },
   {
-    id: "hr-screener",
-    label: "HR-style Screener (friendly, broad)",
+    id: "rigorous",
+    label: "Rigorous",
     description:
-      "a friendly, encouraging HR-style screener. You are warm and supportive, ask broad open-ended questions about approach and communication, and are less focused on deep technical rigor than on how the candidate thinks and communicates.",
-  },
-  {
-    id: "hostile",
-    label: "Hostile Stress-Tester (interrupts, pressure)",
-    description:
-      "a hostile stress-testing interviewer. You apply time pressure, interrupt with pointed challenges, question the candidate's assumptions aggressively, and rarely let a claim pass unchallenged.",
-  },
-  {
-    id: "friendly-vague",
-    label: "Friendly-but-vague (rambles, hard to read)",
-    description:
-      "a friendly but vague interviewer. You ramble, give meandering and indirect feedback, and are generally hard to read — it should often be unclear to the candidate whether you're satisfied or concerned.",
+      "a rigorous, high-bar interviewer. You push on edge cases, correctness, and complexity, rarely offer reassurance, and expect the candidate to drive the conversation — but still give escalating, non-bottom-out hints rather than the full solution when they're stuck.",
   },
 ];
 
-// Auto-selected default persona for difficulties other than google-hard.
-const DEFAULT_PERSONA_ID = "tech-lead";
-
-// google-hard problems default to a terser, more pressuring persona than the
-// candidate's dropdown pick would otherwise imply — unless they explicitly
-// chose a specific persona (anything other than "Auto"), which always wins.
-const BAR_RAISER_DESCRIPTION =
-  "a terse, pressuring Google-style bar-raiser. You hold a very high bar, rarely offer reassurance, move quickly past small talk into complexity and edge cases, and expect the candidate to drive the conversation with minimal prompting from you.";
-
-// Resolves the setup screen's persona choice (which may be "auto") plus the
-// chosen problem's difficulty into the actual instruction text sent to
-// Gemini as "this persona: {...}".
-export function resolvePersonaDescription(settings, problem) {
-  if (settings.persona !== "auto") {
-    const picked = PERSONAS.find((p) => p.id === settings.persona);
-    return picked ? picked.description : PERSONAS.find((p) => p.id === DEFAULT_PERSONA_ID).description;
-  }
-  if (problem && problem.difficulty === "google-hard") return BAR_RAISER_DESCRIPTION;
-  return PERSONAS.find((p) => p.id === DEFAULT_PERSONA_ID).description;
+export function getPersonaDescription(personaId) {
+  const picked = PERSONAS.find((p) => p.id === personaId);
+  return picked ? picked.description : PERSONAS[0].description;
 }
 
-export const PERSONA_OPTIONS = [
-  { id: "auto", label: "Auto (recommended for difficulty)" },
-  ...PERSONAS.map((p) => ({ id: p.id, label: p.label })),
+export const PERSONA_OPTIONS = PERSONAS.map((p) => ({ id: p.id, label: p.label }));
+
+export const SESSION_LENGTH_OPTIONS = [
+  { id: 30, label: "30 minutes" },
+  { id: 45, label: "45 minutes" },
 ];
 
-export const DIFFICULTY_OPTIONS = [
-  { id: "easy", label: "Easy" },
-  { id: "medium", label: "Medium" },
-  { id: "hard", label: "Hard" },
-  { id: "google-hard", label: "Google Hard" },
+// ---------------------------------------------------------------------------
+// Live criteria matrix — the single schema shared by: the visible on-screen
+// panel, every Gemini prompt that can update criteria (per-turn, checkpoint,
+// watchdog nudge), and the final report's per-criterion scores.
+// ---------------------------------------------------------------------------
+export const CRITERIA_DEFINITIONS = [
+  { id: "problemUnderstanding", label: "Problem Understanding" },
+  { id: "communication", label: "Communication & Approach" },
+  { id: "codeQuality", label: "Code Quality & Correctness" },
+  { id: "complexityAwareness", label: "Complexity Awareness" },
 ];
+
+// ---------------------------------------------------------------------------
+// Weighted randomizer for problem selection: ~10% easy / ~45% medium / ~45%
+// hard. The two curated "google-hard" problems keep their own badge/label for
+// display, but fold into the "hard" weight's candidate pool — there's no
+// longer a difficulty dropdown or a difficulty-linked persona override to
+// hang a separate tier off of.
+// ---------------------------------------------------------------------------
+export const DIFFICULTY_WEIGHTS = [
+  { difficulty: "easy", weight: 10 },
+  { difficulty: "medium", weight: 45 },
+  { difficulty: "hard", weight: 45 },
+];
+
+function poolForDifficulty(tier) {
+  if (tier === "hard") return PROBLEM_BANK.filter((p) => p.difficulty === "hard" || p.difficulty === "google-hard");
+  return PROBLEM_BANK.filter((p) => p.difficulty === tier);
+}
+
+// Picks a difficulty tier by weight, then a random problem from that tier's
+// pool. Exported separately from the pure `pickWeighted` utility so callers
+// don't need to know about the google-hard folding rule above.
+export function pickWeightedProblem() {
+  const tier = pickWeighted(DIFFICULTY_WEIGHTS).difficulty;
+  const pool = poolForDifficulty(tier);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 // ---------------------------------------------------------------------------
 // Curated problem bank — hardcoded on purpose (no AI-generated problems).

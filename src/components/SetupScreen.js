@@ -1,6 +1,9 @@
 import { h } from "../reactRuntime.js";
-import { DIFFICULTY_OPTIONS, PERSONA_OPTIONS } from "../config.js";
+import { PERSONA_OPTIONS, SESSION_LENGTH_OPTIONS } from "../config.js";
 
+// Difficulty is no longer chosen here — the problem is picked by the
+// weighted randomizer (~10% easy / ~45% medium / ~45% hard) once the
+// candidate hits Start. The only dials left are persona and session length.
 export default function SetupScreen({ settings, onChangeSettings, onStart }) {
   return h(
     "div",
@@ -12,20 +15,7 @@ export default function SetupScreen({ settings, onChangeSettings, onStart }) {
       h(
         "p",
         { className: "subtitle" },
-        "Practice a live coding interview against an AI interviewer — voice, real editor, real test cases."
-      ),
-      h(
-        "label",
-        { className: "field" },
-        h("span", null, "Difficulty"),
-        h(
-          "select",
-          {
-            value: settings.difficulty,
-            onChange: (e) => onChangeSettings({ difficulty: e.target.value }),
-          },
-          DIFFICULTY_OPTIONS.map((opt) => h("option", { key: opt.id, value: opt.id }, opt.label))
-        )
+        "Practice a live coding interview against an AI interviewer — voice, real editor, real test cases. Your problem is picked for you (weighted toward medium/hard)."
       ),
       h(
         "label",
@@ -38,6 +28,19 @@ export default function SetupScreen({ settings, onChangeSettings, onStart }) {
             onChange: (e) => onChangeSettings({ persona: e.target.value }),
           },
           PERSONA_OPTIONS.map((opt) => h("option", { key: opt.id, value: opt.id }, opt.label))
+        )
+      ),
+      h(
+        "label",
+        { className: "field" },
+        h("span", null, "Session length"),
+        h(
+          "select",
+          {
+            value: settings.sessionLengthMinutes,
+            onChange: (e) => onChangeSettings({ sessionLengthMinutes: Number(e.target.value) }),
+          },
+          SESSION_LENGTH_OPTIONS.map((opt) => h("option", { key: opt.id, value: opt.id }, opt.label))
         )
       ),
       h(

@@ -1,15 +1,18 @@
 import { useState, h } from "./reactRuntime.js";
-import { PROBLEM_BANK } from "./config.js";
+import { pickWeightedProblem } from "./config.js";
 import { callGeminiScorecard } from "./api/geminiClient.js";
+import { aggregateFillerStats } from "./utils/fillerWords.js";
 import SetupScreen from "./components/SetupScreen.js";
 import InterviewScreen from "./components/InterviewScreen.js";
 import ScorecardScreen from "./components/ScorecardScreen.js";
 
-const DEFAULT_SETTINGS = { difficulty: "easy", persona: "auto" };
+const DEFAULT_SETTINGS = { persona: "supportive", sessionLengthMinutes: 30 };
 
 // Top-level state machine. Everything here is plain React state — per the
 // hard constraints, nothing persists across a refresh and there is no
-// backend/database backing any of it.
+// database backing any of it (the only server involved is the same-origin
+// ADC-authenticated proxy in server/server.js, which holds no session state
+// of its own).
 export default function App() {
   const [view, setView] = useState("setup"); // setup | interview | generating-scorecard | scorecard
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -18,8 +21,13 @@ export default function App() {
   const [code, setCode] = useState("");
   const [lastTestResults, setLastTestResults] = useState([]);
   const [transcript, setTranscript] = useState([]);
-  const [interviewerImpressions, setInterviewerImpressions] = useState(""); // never shown to the candidate
-  const [hintsUsed, setHintsUsed] = useState(0);
+  // Shared session log the three agents all write into: per-turn updates
+  // (Agent 1), periodic checkpoint updates (Agent 2), and watchdog nudges
+  // (Agent 3) each append { timestamp, source, criteriaUpdate }. Unlike the
+  // old hidden "interviewerImpressions" this replaces, it's shown live to
+  // the candidate via CriteriaMatrix.
+  const [criteriaLog, setCriteriaLog] = useState([]);
+  const [watchdogNudgeCount, setWatchdogNudgeCount] = useState(0);
   const [scorecard, setScorecard] = useState(null);
   const [scorecardError, setScorecardError] = useState(null);
 
@@ -28,40 +36,41 @@ export default function App() {
   }
 
   function handleStart() {
-    const pool = PROBLEM_BANK.filter((p) => p.difficulty === settings.difficulty);
-    const problem = pool[Math.floor(Math.random() * pool.length)];
+    const problem = pickWeightedProblem();
     setCurrentProblem(problem);
     setCode(problem.starterCode);
     setLastTestResults([]);
     setTranscript([]);
-    setInterviewerImpressions("");
-    setHintsUsed(0);
+    setCriteriaLog([]);
+    setWatchdogNudgeCount(0);
     setScorecard(null);
     setScorecardError(null);
     setView("interview");
   }
 
-  async function generateScorecard(finalHintsUsed) {
+  async function generateScorecard(finalWatchdogNudgeCount) {
     setView("generating-scorecard");
     setScorecardError(null);
     try {
+      const fillerStats = aggregateFillerStats(transcript.filter((e) => e.role === "candidate").map((e) => e.text));
       const result = await callGeminiScorecard({
         currentProblem,
         code,
         lastTestResults,
         transcript,
-        interviewerImpressions,
-        hintsUsed: finalHintsUsed,
+        criteriaLog,
+        fillerStats,
+        watchdogNudgeCount: finalWatchdogNudgeCount,
       });
-      setScorecard({ ...result, hintsUsed: finalHintsUsed });
+      setScorecard(result);
       setView("scorecard");
     } catch (err) {
-      setScorecardError({ message: err.message, retry: () => generateScorecard(finalHintsUsed) });
+      setScorecardError({ message: err.message, retry: () => generateScorecard(finalWatchdogNudgeCount) });
     }
   }
 
   function handleWrapUp() {
-    generateScorecard(hintsUsed);
+    generateScorecard(watchdogNudgeCount);
   }
 
   function handleRestart() {
@@ -71,8 +80,8 @@ export default function App() {
     setCode("");
     setLastTestResults([]);
     setTranscript([]);
-    setInterviewerImpressions("");
-    setHintsUsed(0);
+    setCriteriaLog([]);
+    setWatchdogNudgeCount(0);
     setScorecard(null);
     setScorecardError(null);
   }
@@ -91,10 +100,10 @@ export default function App() {
       setLastTestResults,
       transcript,
       setTranscript,
-      interviewerImpressions,
-      setInterviewerImpressions,
-      hintsUsed,
-      setHintsUsed,
+      criteriaLog,
+      setCriteriaLog,
+      watchdogNudgeCount,
+      setWatchdogNudgeCount,
       onWrapUp: handleWrapUp,
     });
   }
@@ -114,5 +123,12 @@ export default function App() {
     );
   }
 
-  return h(ScorecardScreen, { scorecard, lastTestResults, onRestart: handleRestart });
+  const fillerStats = aggregateFillerStats(transcript.filter((e) => e.role === "candidate").map((e) => e.text));
+  return h(ScorecardScreen, {
+    scorecard,
+    lastTestResults,
+    fillerStats,
+    watchdogNudgeCount,
+    onRestart: handleRestart,
+  });
 }

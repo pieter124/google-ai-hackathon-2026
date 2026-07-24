@@ -1,11 +1,17 @@
 {
   "name": "mock-interview-agent",
   "version": "1.0.0",
-  "description": "Live coding-interview practice tool with an AI interviewer (voice, real code editor, sandboxed test execution). No build step: plain ES modules, React/CodeMirror loaded from CDN.",
+  "description": "Live coding-interview practice tool with an AI interviewer (voice, real code editor, sandboxed test execution). No build step for the frontend: plain ES modules, React/CodeMirror loaded from CDN. A small Express backend authenticates to Google via Application Default Credentials and proxies the Gemini/Speech-to-Text calls, so no API key ever reaches the browser.",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "npx --yes serve . -l 8000"
+    "start": "node server/server.js",
+    "start:static": "npx --yes serve . -l 8000"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "google-auth-library": "^9.14.1"
   },
   "license": "UNLICENSED"
 }
