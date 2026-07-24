@@ -6,7 +6,7 @@ import SetupScreen from "./components/SetupScreen.js";
 import InterviewScreen from "./components/InterviewScreen.js";
 import ScorecardScreen from "./components/ScorecardScreen.js";
 
-const DEFAULT_SETTINGS = { persona: "supportive", sessionLengthMinutes: 30 };
+const DEFAULT_SETTINGS = { interviewerId: "maya", language: "javascript", sessionLengthMinutes: 30 };
 
 // Top-level state machine. Everything here is plain React state — per the
 // hard constraints, nothing persists across a refresh and there is no
@@ -38,7 +38,7 @@ export default function App() {
   function handleStart() {
     const problem = pickWeightedProblem();
     setCurrentProblem(problem);
-    setCode(problem.starterCode);
+    setCode(problem.starterCode[settings.language] || problem.starterCode.javascript);
     setLastTestResults([]);
     setTranscript([]);
     setCriteriaLog([]);
@@ -55,6 +55,7 @@ export default function App() {
       const fillerStats = aggregateFillerStats(transcript.filter((e) => e.role === "candidate").map((e) => e.text));
       const result = await callGeminiScorecard({
         currentProblem,
+        language: settings.language,
         code,
         lastTestResults,
         transcript,
@@ -75,7 +76,8 @@ export default function App() {
 
   function handleRestart() {
     setView("setup");
-    setSettings(DEFAULT_SETTINGS);
+    // Settings survive on purpose — "Practice again" shouldn't forget who
+    // you like interviewing with or which language you code in.
     setCurrentProblem(null);
     setCode("");
     setLastTestResults([]);
@@ -119,13 +121,20 @@ export default function App() {
             h("span", null, `⚠️ Couldn't generate the scorecard: ${scorecardError.message}`),
             h("button", { className: "btn btn-small", onClick: scorecardError.retry }, "Retry")
           )
-        : h("p", { className: "spinner-label" }, "Generating your coaching scorecard...")
+        : h(
+            "div",
+            { className: "loading-stack" },
+            h("div", { className: "spinner" }),
+            h("p", { className: "spinner-label" }, "Generating your coaching scorecard...")
+          )
     );
   }
 
   const fillerStats = aggregateFillerStats(transcript.filter((e) => e.role === "candidate").map((e) => e.text));
   return h(ScorecardScreen, {
     scorecard,
+    problem: currentProblem,
+    settings,
     lastTestResults,
     fillerStats,
     watchdogNudgeCount,

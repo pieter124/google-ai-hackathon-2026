@@ -9,6 +9,34 @@ import { mergeCriteriaLog } from "../utils/criteria.js";
 const GEMINI_PROXY_ENDPOINT = "/api/gemini/generate";
 const VALID_CRITERIA_IDS = CRITERIA_DEFINITIONS.map((c) => c.id).join(", ");
 
+// Deliberately harsh calibration, shared by every prompt that scores the
+// candidate (per-turn, checkpoint, scorecard) so the live matrix and the
+// final report can't drift apart in strictness.
+const GRADING_RUBRIC = `Grade against a real top-tier hiring bar, strictly:
+- 1 = well below bar, 2 = below bar, 3 = meets the bar with reservations, 4 = clearly strong, 5 = exceptional and rare — most sessions should never see a 5.
+- Actively penalize: missing or hand-wavy complexity discussion, unhandled edge cases, rambling or unclear communication, needing proactive nudges, and code that doesn't pass the tests.
+- Never inflate a score to be kind; when torn between two scores, give the lower one.`;
+
+const LANGUAGE_LABELS = { javascript: "JavaScript", python: "Python" };
+
+// One shared textual rendering of the problem (description + LeetCode-style
+// examples and constraints) so every agent reasons from the same statement
+// the candidate sees on screen.
+function describeProblem(problem) {
+  const examples = (problem.examples || [])
+    .map(
+      (ex, i) =>
+        `Example ${i + 1}: Input: ${ex.input} -> Output: ${ex.output}${ex.explanation ? ` (${ex.explanation})` : ""}`
+    )
+    .join("\n");
+  const constraints = (problem.constraints || []).map((c) => `- ${c}`).join("\n");
+  return `${problem.title} [${problem.difficulty}]
+${problem.description}
+${examples}
+Constraints:
+${constraints}`;
+}
+
 // Thrown on any non-2xx Gemini response, carrying the HTTP status so callers
 // can tell "bad request" (e.g. an audio MIME type Gemini won't accept) apart
 // from a timeout or outage — that distinction is what drives the
@@ -104,6 +132,7 @@ function sanitizeCriteriaUpdate(raw) {
 export async function callGeminiInterviewTurn({
   currentProblem,
   personaDescription,
+  language,
   code,
   lastTestResults,
   transcript,
@@ -112,8 +141,10 @@ export async function callGeminiInterviewTurn({
   audio, // optional { base64, mimeType }
 }) {
   const prompt = `You are acting as a coding interviewer with this persona: ${personaDescription}
-Problem: ${currentProblem.title} — ${currentProblem.description}
+Problem:
+${describeProblem(currentProblem)}
 
+The candidate is coding in ${LANGUAGE_LABELS[language] || "JavaScript"}.
 Candidate's current code:
 ${code}
 
@@ -122,19 +153,21 @@ Criteria tracked so far this session (score 1-5, higher is better; ids missing h
 Full transcript so far: ${JSON.stringify(transcript)}
 Latest event: ${latestEvent}${audio ? "\nThe candidate's raw spoken audio for this turn is attached as well — factor in tone, hesitation, and fluency, not just the words." : ""}
 
-Respond as the interviewer would in exactly ONE turn. If the candidate just ran
-code, react to the actual pass/fail results and their code, don't ask about
-something already visible. If they explained their approach, follow up on
-anything vague or ask about complexity/edge cases. If this is a proactive
+Respond as the interviewer would in exactly ONE turn, and keep it SPOKEN-length
+— a few sentences at most, since your reply is read aloud. If the candidate
+just ran code, react to the actual pass/fail results and their code, don't ask
+about something already visible. If they explained their approach, follow up
+on anything vague or ask about complexity/edge cases. If this is a proactive
 nudge (the candidate seems stuck), offer a small escalating hint in character
 without giving away the full solution — start vague, only get more concrete
 if they were already stuck last time too. Stay in character for the persona
 given. After forming your response, update whichever of these criteria you
 now have real signal for (valid ids: ${VALID_CRITERIA_IDS}) — it's fine to
 leave others out if this turn didn't touch them.
+${GRADING_RUBRIC}${audio ? '\nAlso transcribe the candidate\'s spoken words from the attached audio, verbatim, into "candidateTranscript".' : ""}
 
 Return ONLY valid JSON in this exact shape, no other text:
-{ "response": "...", "criteriaUpdate": { "<criterionId>": { "score": 1-5, "note": "..." } } }`;
+{ "response": "..."${audio ? ', "candidateTranscript": "..."' : ""}, "criteriaUpdate": { "<criterionId>": { "score": 1-5, "note": "..." } } }`;
 
   const parts = [{ text: prompt }];
   if (audio) parts.push({ inlineData: { mimeType: audio.mimeType, data: audio.base64 } });
@@ -148,7 +181,11 @@ Return ONLY valid JSON in this exact shape, no other text:
   if (typeof parsed.response !== "string") {
     throw new Error("Gemini returned an unexpected shape for the interview turn.");
   }
-  return { response: parsed.response, criteriaUpdate: sanitizeCriteriaUpdate(parsed.criteriaUpdate) };
+  return {
+    response: parsed.response,
+    criteriaUpdate: sanitizeCriteriaUpdate(parsed.criteriaUpdate),
+    candidateTranscript: typeof parsed.candidateTranscript === "string" ? parsed.candidateTranscript.trim() : "",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -160,9 +197,11 @@ Return ONLY valid JSON in this exact shape, no other text:
 // drift and long idle windows still get analyzed and logged, not silently
 // skipped.
 // ---------------------------------------------------------------------------
-export async function callGeminiCheckpoint({ currentProblem, code, transcriptSlice, codeChangeSummary, criteriaLog }) {
+export async function callGeminiCheckpoint({ currentProblem, language, code, transcriptSlice, codeChangeSummary, criteriaLog }) {
   const prompt = `You are the Aggregator for a live coding interview — an independent, periodic checkpoint, not a reply to any one turn.
-Problem: ${currentProblem.title} — ${currentProblem.description}
+Problem:
+${describeProblem(currentProblem)}
+The candidate is coding in ${LANGUAGE_LABELS[language] || "JavaScript"}.
 Candidate's current code:
 ${code}
 Code activity in this window: ${codeChangeSummary}
@@ -173,6 +212,7 @@ Analyze this whole window rather than one exchange — catch things a single
 turn's reasoning would miss, such as a long idle stretch with no turn sent at
 all, or drift that only shows up across several exchanges. Update whichever
 of these criteria you have real signal for (valid ids: ${VALID_CRITERIA_IDS}).
+${GRADING_RUBRIC}
 
 Return ONLY valid JSON in this exact shape, no other text:
 { "criteriaUpdate": { "<criterionId>": { "score": 1-5, "note": "..." } } }`;
@@ -196,6 +236,7 @@ Return ONLY valid JSON in this exact shape, no other text:
 // ---------------------------------------------------------------------------
 export async function callGeminiScorecard({
   currentProblem,
+  language,
   code,
   lastTestResults,
   transcript,
@@ -206,7 +247,9 @@ export async function callGeminiScorecard({
   const criteriaList = CRITERIA_DEFINITIONS.map((c) => `- ${c.id}: ${c.label}`).join("\n");
 
   const prompt = `Given this full interview session:
-Problem: ${currentProblem.title} — ${currentProblem.description}
+Problem:
+${describeProblem(currentProblem)}
+The candidate coded in ${LANGUAGE_LABELS[language] || "JavaScript"}.
 Final code: ${code}
 Final test results: ${JSON.stringify(lastTestResults)}
 Full transcript: ${JSON.stringify(transcript)}
@@ -218,6 +261,7 @@ Produce a coaching scorecard. For each criterion below, give a final score out
 of 5 and a short note informed by how it evolved across the whole session
 (not just the last update):
 ${criteriaList}
+${GRADING_RUBRIC}
 
 Also produce a path narrative: a short account of which states the candidate
 moved through (understanding the problem, attempting an approach, getting
@@ -226,8 +270,10 @@ or running out of time) and where the friction was.
 
 Assess correctness from the final test results, estimate the time and space
 complexity of the final code, and give a realistic hire/no-hire verdict with
-brief reasoning that factors in how often the candidate needed a proactive
-nudge.
+brief reasoning. Default to "no-hire" unless the evidence is affirmatively
+strong: an unsolved problem, failed tests, or repeated proactive nudges should
+normally rule out "hire". "verdictDecision" must be exactly one of:
+"hire", "lean-hire", "lean-no-hire", "no-hire".
 
 Return ONLY valid JSON in this exact shape, no other text:
 {
@@ -235,6 +281,7 @@ Return ONLY valid JSON in this exact shape, no other text:
   "pathNarrative": "...",
   "correctness": "...",
   "complexity": "...",
+  "verdictDecision": "hire" | "lean-hire" | "lean-no-hire" | "no-hire",
   "verdict": "..."
 }`;
 
@@ -248,11 +295,13 @@ Return ONLY valid JSON in this exact shape, no other text:
   );
 
   const parsed = parseJsonResponse(extractText(data));
+  const validDecisions = ["hire", "lean-hire", "lean-no-hire", "no-hire"];
   return {
     criteriaScores: Array.isArray(parsed.criteriaScores) ? parsed.criteriaScores : [],
     pathNarrative: parsed.pathNarrative || "",
     correctness: parsed.correctness || "Unknown",
     complexity: parsed.complexity || "Unknown",
+    verdictDecision: validDecisions.includes(parsed.verdictDecision) ? parsed.verdictDecision : null,
     verdict: parsed.verdict || "",
   };
 }

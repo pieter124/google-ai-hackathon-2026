@@ -58,7 +58,17 @@ async function proxyWithApiKey(res, url, body) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await upstream.json();
+    // Google occasionally answers errors with non-JSON (HTML, plain text).
+    // Parsing defensively keeps the real upstream status flowing through —
+    // the frontend's audio→Speech-to-Text fallback keys on seeing a 400,
+    // which a blanket 500 here would mask.
+    const text = await upstream.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text || upstream.statusText };
+    }
     res.status(upstream.status).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -136,8 +146,8 @@ app.listen(PORT, () => {
   console.log(`Mock interview agent running at http://localhost:${PORT}`);
   if (GEMINI_API_KEY) {
     console.log(
-      "Using GEMINI_API_KEY for all Google calls (Gemini, Speech-to-Text, Text-to-Speech). " +
-        "If Speech-to-Text/Text-to-Speech 500 with an ADC error, this key isn't scoped for those APIs yet."
+      "Using GEMINI_API_KEY for Gemini calls. Speech-to-Text and Text-to-Speech don't accept " +
+        "API keys at all, though — they always need ADC (see README) regardless of this setting."
     );
   } else if (!GCP_PROJECT_ID) {
     console.warn("⚠️  Neither GEMINI_API_KEY nor GCP_PROJECT_ID is set — Gemini calls will fail until you set one in .env");

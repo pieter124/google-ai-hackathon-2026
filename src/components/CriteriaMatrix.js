@@ -3,6 +3,16 @@ import { CRITERIA_DEFINITIONS } from "../config.js";
 
 const DOTS = [1, 2, 3, 4, 5];
 
+// 1-5 score as a row of dots — shared between the live matrix here and the
+// final scorecard so both read the same way.
+export function ScoreDots({ score }) {
+  return h(
+    "div",
+    { className: "criteria-bar" },
+    DOTS.map((i) => h("span", { key: i, className: `criteria-dot${i <= score ? " filled" : ""}` }))
+  );
+}
+
 // Visible, live-updating scorecard preview — deliberately shown to the
 // candidate throughout the interview (per the spec), not hidden like the
 // old private "interviewerImpressions" concept it replaces. Fed by
@@ -25,11 +35,7 @@ export default function CriteriaMatrix({ liveCriteria }) {
           h("span", { className: "criteria-label" }, def.label),
           h("span", { className: "criteria-score" }, entry ? `${entry.score}/5` : "—")
         ),
-        h(
-          "div",
-          { className: "criteria-bar" },
-          DOTS.map((i) => h("span", { key: i, className: `criteria-dot${i <= score ? " filled" : ""}` }))
-        ),
+        h(ScoreDots, { score }),
         entry && entry.note ? h("p", { className: "criteria-note" }, entry.note) : null
       );
     })

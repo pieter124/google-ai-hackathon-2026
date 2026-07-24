@@ -14,7 +14,10 @@ export function blobToBase64(blob) {
 // can exist at once, and we create a fresh <audio> element per reply anyway.
 let sharedAudioContext = null;
 
-function getSharedAudioContext() {
+// Exported so the hands-free voice loop (utils/voiceLoop.js) can hang its
+// mic AnalyserNode off the same context the TTS playback graph uses — one
+// context for the whole page, unlocked once by the Start-interview click.
+export function getSharedAudioContext() {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) return null;
   if (!sharedAudioContext) sharedAudioContext = new AudioContextClass();
