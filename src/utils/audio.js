@@ -24,18 +24,9 @@ export function getSharedAudioContext() {
   return sharedAudioContext;
 }
 
-// Once an <audio> element is routed through `createMediaElementSource` (see
-// below, used for the avatar orb's amplitude data), its sound ONLY comes out
-// via the Web Audio graph — the element's direct-to-speakers path is
-// severed. That graph is silent whenever the AudioContext is "suspended",
-// which is its default state until a genuine user gesture resumes it. Our
-// TTS playback happens several awaited fetch calls after the mic click that
-// started the turn, which can be too far removed from the click for the
-// browser to still credit it as gesture-driven — so without this, replies
-// can look like they're playing (no error, "speaking" state, onended fires)
-// while producing zero sound. Call this synchronously from a click handler
-// (see InterviewScreen's handleMicClick) to resume the context while it
-// still counts as a gesture.
+// Resume the shared context from inside a genuine user gesture. The context
+// feeds the hands-free mic analyser and the offline amplitude decode below;
+// resuming it early (Start-interview click, text submits) keeps both live.
 export function unlockAudioContext() {
   const ctx = getSharedAudioContext();
   if (ctx && ctx.state === "suspended") {
@@ -43,51 +34,71 @@ export function unlockAudioContext() {
   }
 }
 
-// Wires a Web Audio AnalyserNode to an <audio> element so the avatar orb can
-// read live amplitude while a reply plays. `createMediaElementSource` may
-// only be called once per element, which is fine: we build a brand new
-// Audio() for every reply (see prepareAudioPlayback below).
-function createAmplitudeAnalyser(audioEl) {
+// Offline amplitude envelope: RMS per 50ms window of the decoded reply, so
+// the avatar can animate to the voice WITHOUT routing playback through the
+// Web Audio graph. Routing through the graph is exactly what broke replies:
+// Chrome's echo canceller only subtracts audio played by plain media
+// elements, so graph-routed TTS leaked into the mic, the hands-free loop
+// heard "speech", and barge-in cut the interviewer off half a second in.
+const ENVELOPE_HZ = 20;
+
+async function decodeAmplitudeEnvelope(base64Audio) {
   const ctx = getSharedAudioContext();
-  if (!ctx) return null;
-  if (ctx.state === "suspended") ctx.resume().catch(() => {});
-  const source = ctx.createMediaElementSource(audioEl);
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 256;
-  source.connect(analyser);
-  analyser.connect(ctx.destination);
-  return analyser;
+  if (!ctx) throw new Error("Web Audio unavailable");
+  const binary = atob(base64Audio);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const decoded = await ctx.decodeAudioData(bytes.buffer);
+  const samples = decoded.getChannelData(0);
+  const windowSize = Math.floor(decoded.sampleRate / ENVELOPE_HZ);
+  const envelope = new Float32Array(Math.ceil(samples.length / windowSize));
+  for (let w = 0; w < envelope.length; w++) {
+    const start = w * windowSize;
+    const end = Math.min(samples.length, start + windowSize);
+    let sum = 0;
+    for (let i = start; i < end; i++) sum += samples[i] * samples[i];
+    envelope[w] = Math.sqrt(sum / Math.max(1, end - start));
+  }
+  return envelope;
 }
 
 // Prepares a base64-encoded audio reply (MP3 from Cloud Text-to-Speech) for
-// playback, wiring it through an AnalyserNode so the avatar orb can read
-// amplitude while it plays. Returns synchronously so the caller can start
-// reading `analyser` immediately rather than waiting for playback to
-// finish. `finished` resolves exactly once, whether playback completed,
-// errored, or was blocked by the browser's autoplay policy — it never
-// rejects, so a TTS/audio hiccup can never strand the UI (the interviewer's
-// line is always shown as text too).
+// playback through a PLAIN <audio> element — deliberately not Web Audio, so
+// echo cancellation keeps it out of the mic (see above). `getLevel()`
+// returns the voice's current amplitude (from the offline envelope, indexed
+// by playback position) for the avatar animation. `finished` resolves
+// exactly once, whether playback completed, errored, was blocked by the
+// browser's autoplay policy, or was cut short by `stop()` (barge-in / Skip)
+// — it never rejects, so a TTS/audio hiccup can never strand the UI (the
+// interviewer's line is always shown as text too).
 export function prepareAudioPlayback(base64Audio, mimeType = "audio/mp3") {
   let audio;
-  let analyser = null;
   try {
     audio = new Audio(`data:${mimeType};base64,${base64Audio}`);
-    try {
-      analyser = createAmplitudeAnalyser(audio);
-    } catch (err) {
-      console.warn("Amplitude analyser unavailable:", err.message);
-    }
   } catch (err) {
-    return { audio: null, analyser: null, finished: Promise.resolve({ played: false }) };
+    return { audio: null, getLevel: () => 0, finished: Promise.resolve({ played: false }), stop: () => {} };
   }
 
+  let envelope = null;
+  decodeAmplitudeEnvelope(base64Audio)
+    .then((env) => { envelope = env; })
+    .catch(() => {}); // animation falls back to a gentle constant
+
+  const getLevel = () => {
+    if (audio.paused || audio.ended) return 0;
+    if (!envelope) return 0.1;
+    return envelope[Math.floor(audio.currentTime * ENVELOPE_HZ)] || 0;
+  };
+
+  let settled = false;
+  let settleFn = null;
   const finished = new Promise((resolve) => {
-    let settled = false;
     const settle = (played) => {
       if (settled) return;
       settled = true;
       resolve({ played });
     };
+    settleFn = settle;
     audio.onended = () => settle(true);
     audio.onerror = () => settle(false);
     const playPromise = audio.play();
@@ -96,5 +107,12 @@ export function prepareAudioPlayback(base64Audio, mimeType = "audio/mp3") {
     }
   });
 
-  return { audio, analyser, finished };
+  const stop = () => {
+    try {
+      audio.pause();
+    } catch {}
+    if (settleFn) settleFn(false);
+  };
+
+  return { audio, getLevel, finished, stop };
 }

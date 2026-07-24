@@ -1,6 +1,7 @@
 import { useState, useEffect, h } from "../reactRuntime.js";
 import { INTERVIEWERS, LANGUAGE_OPTIONS, SESSION_LENGTH_OPTIONS } from "../config.js";
-import { getAvatar } from "../api/avatarClient.js";
+import { getAvatar, getAvatarVariant } from "../api/avatarClient.js";
+import { preloadPython } from "../utils/pythonRunner.js";
 import { unlockAudioContext } from "../utils/audio.js";
 
 function initialsOf(name) {
@@ -42,19 +43,43 @@ export default function SetupScreen({ settings, onChangeSettings, onStart }) {
 
   useEffect(() => {
     let cancelled = false;
-    for (const interviewer of INTERVIEWERS) {
+    const basePromises = INTERVIEWERS.map((interviewer) =>
       getAvatar(interviewer)
         .then((dataUri) => {
           if (!cancelled) setAvatars((prev) => ({ ...prev, [interviewer.id]: dataUri }));
         })
         .catch(() => {
           if (!cancelled) setAvatars((prev) => ({ ...prev, [interviewer.id]: "error" }));
-        });
-    }
+        })
+    );
+
+    // Demo warm-up: once the visible portraits are in, quietly pre-generate
+    // every character's animation frames (mouth-open + blink), one at a
+    // time so we never hammer the image model. Everything lands in the
+    // localStorage cache, so an interview started later — with ANY
+    // character — has its talking animation ready instantly. Deliberately
+    // not cancelled on unmount: the whole point is to finish in the
+    // background. Cache hits make this a no-op on every visit after the
+    // first.
+    Promise.allSettled(basePromises).then(async () => {
+      for (const interviewer of INTERVIEWERS) {
+        await getAvatarVariant(interviewer, "talking").catch(() => {});
+        await getAvatarVariant(interviewer, "blink").catch(() => {});
+      }
+    });
+
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Same idea for Python: picking it on this screen starts the ~10MB
+  // Pyodide download immediately, so the runtime is warm before the editor
+  // even appears. (The worker is a module-level singleton — it survives
+  // the switch to the interview screen.)
+  useEffect(() => {
+    if (settings.language === "python") preloadPython();
+  }, [settings.language]);
 
   return h(
     "div",
@@ -66,7 +91,7 @@ export default function SetupScreen({ settings, onChangeSettings, onStart }) {
       h(
         "p",
         { className: "subtitle" },
-        "A live coding interview against an AI interviewer — real voice, real editor, real test cases. Pick who's across the table; the problem is chosen for you, weighted toward medium and hard."
+        "A live coding interview against an AI interviewer — real voice, real editor, real test cases. Pick who's across the table; the problem is chosen for you."
       ),
 
       h("h2", { className: "setup-section-title" }, "Your interviewer"),

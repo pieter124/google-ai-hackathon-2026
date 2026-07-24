@@ -9,21 +9,30 @@ import { createVoiceLoop } from "../utils/voiceLoop.js";
 import { blobToBase64, prepareAudioPlayback, unlockAudioContext } from "../utils/audio.js";
 import { aggregateFillerStats } from "../utils/fillerWords.js";
 import { mergeCriteriaLog } from "../utils/criteria.js";
-import { getAvatar } from "../api/avatarClient.js";
+import { getAvatar, getAvatarVariant, getAvatarVideoUrl } from "../api/avatarClient.js";
 import { speechToText, textToSpeech } from "../api/speechClient.js";
 import { callGeminiInterviewTurn, callGeminiCheckpoint, GeminiHttpError } from "../api/geminiClient.js";
 
 // Tunable constants — named here rather than buried in logic so they're easy
 // to shorten for a demo/test run without hunting through the file.
 const WATCHDOG_CHECK_INTERVAL_MS = 5000;
-// Hands-free listening removes push-to-talk's click friction, but thinking
-// silently at the editor is still normal — keep this in the tens of seconds.
-const WATCHDOG_SILENT_IDLE_THRESHOLD_MS = 45000;
+// The interviewer is deliberately a QUIET presence: they check in only when
+// the candidate hasn't said (or typed to them) anything for this long —
+// every 1.5 minutes of silence, like a real interviewer glancing up.
+const WATCHDOG_CHECKIN_SILENCE_MS = 90000;
 const WATCHDOG_FILLER_RATIO_THRESHOLD = 0.18;
 const WATCHDOG_FILLER_LOOKBACK_TURNS = 3;
 const AGGREGATOR_INTERVAL_MS = 4 * 60 * 1000;
 const COUNTDOWN_WARN_SECONDS = 5 * 60;
 const COUNTDOWN_DANGER_SECONDS = 60;
+// Barge-in: speech over the interviewer's reply must sustain this long
+// before we cut the TTS — echoCancellation keeps the speaker output out of
+// the mic, and this guard absorbs any blips that still get through.
+const BARGE_IN_SUSTAIN_MS = 600;
+// While the reply is playing, the mic needs this multiple of the normal
+// speech threshold to start a capture — real interruption speech is much
+// louder at the mic than any echo residue that survives cancellation.
+const BARGE_IN_THRESHOLD_BOOST = 2.5;
 
 function formatCountdown(totalSeconds) {
   const m = Math.floor(totalSeconds / 60);
@@ -38,6 +47,36 @@ function initialsOf(name) {
     .join("")
     .slice(0, 2)
     .toUpperCase();
+}
+
+// Interviewer replies type out character by character while the voice
+// speaks, like a live caption. Defined at module level so React keeps each
+// entry's instance mounted across renders — every reply animates exactly
+// once, when it first appears, and stays put afterwards. `cps` (chars/sec)
+// is ~15 with voice on — matching natural speech rate, so text and voice
+// stay roughly in step — and faster when the reply is text-only.
+function TypedText({ text, onGrow, cps = 15 }) {
+  const [visibleCount, setVisibleCount] = useState(0);
+
+  useEffect(() => {
+    setVisibleCount(0);
+    const interval = setInterval(() => {
+      setVisibleCount((count) => {
+        const next = Math.min(text.length, count + 1);
+        if (next >= text.length) clearInterval(interval);
+        return next;
+      });
+    }, Math.round(1000 / cps));
+    return () => clearInterval(interval);
+  }, [text]);
+
+  // Keep the growing text pinned to the bottom of the transcript.
+  useEffect(() => {
+    if (onGrow) onGrow();
+    // eslint-disable-next-line
+  }, [visibleCount]);
+
+  return h("span", { className: "entry-text" }, text.slice(0, visibleCount));
 }
 
 export default function InterviewScreen({
@@ -68,9 +107,15 @@ export default function InterviewScreen({
   const [textInputValue, setTextInputValue] = useState("");
   const [runningTests, setRunningTests] = useState(false);
   const [errorBanner, setErrorBanner] = useState(null); // { message, retry }
-  const [activeAnalyser, setActiveAnalyser] = useState(null); // feeds the avatar ring
+  const [activeLevelSource, setActiveLevelSource] = useState(null); // reply amplitude fn, feeds the avatar
   const [secondsLeft, setSecondsLeft] = useState(settings.sessionLengthMinutes * 60);
-  const [avatarSrc, setAvatarSrc] = useState(null);
+  // base portrait + mouth-open + eyes-closed frames for the talking
+  // animation; each lands as soon as its generation (or cache read) is done.
+  const [avatarFrames, setAvatarFrames] = useState({ base: null, talking: null, blink: null });
+  const [avatarVideoSrc, setAvatarVideoSrc] = useState(null); // pre-generated Veo talking loop, if any
+  const [voiceOverOn, setVoiceOverOn] = useState(true);
+  const voiceOverOnRef = useRef(true);
+  useEffect(() => { voiceOverOnRef.current = voiceOverOn; }, [voiceOverOn]);
   const [pyStatus, setPyStatus] = useState(getPythonStatus());
 
   // Refs mirror fast-changing state so async callbacks (voice pipeline,
@@ -103,9 +148,22 @@ export default function InterviewScreen({
 
   useEffect(() => {
     let cancelled = false;
+    const merge = (partial) => {
+      if (!cancelled) setAvatarFrames((prev) => ({ ...prev, ...partial }));
+    };
     getAvatar(interviewer)
-      .then((src) => { if (!cancelled) setAvatarSrc(src); })
+      .then((base) => {
+        merge({ base });
+        // Animation frames are progressive enhancement on top of the base
+        // portrait — each one fades in whenever it's ready, and a failed
+        // generation just means that part of the animation doesn't happen.
+        getAvatarVariant(interviewer, "talking").then((talking) => merge({ talking })).catch(() => {});
+        getAvatarVariant(interviewer, "blink").then((blink) => merge({ blink })).catch(() => {});
+      })
       .catch(() => {}); // initials fallback renders instead
+    getAvatarVideoUrl(interviewer).then((url) => {
+      if (!cancelled && url) setAvatarVideoSrc(url);
+    });
     return () => { cancelled = true; };
     // eslint-disable-next-line
   }, []);
@@ -150,12 +208,29 @@ export default function InterviewScreen({
 
     // Audio turns carry no typed text — the model transcribes the speech so
     // the candidate's words still land in the visible transcript (and count
-    // toward the local filler-word stats).
-    let withCandidate = transcriptRef.current;
+    // toward the local filler-word stats). Their own words appear right
+    // away; only the interviewer's reply waits for its audio below.
     if (audio && turn.candidateTranscript) {
-      withCandidate = [...withCandidate, { role: "candidate", text: turn.candidateTranscript }];
+      const withCandidate = [...transcriptRef.current, { role: "candidate", text: turn.candidateTranscript }];
+      setTranscript(withCandidate);
+      transcriptRef.current = withCandidate;
     }
-    const transcriptWithReply = [...withCandidate, { role: "interviewer", text: turn.response }];
+
+    // Synthesize BEFORE revealing the reply: TTS for a long answer takes a
+    // few seconds, and starting the typewriter first left the voice ~4s
+    // behind the text. Holding the reveal until the audio is in hand lets
+    // text and voice start together — the "thinking" dots cover the wait,
+    // and a TTS failure soft-fails to text-only exactly as before.
+    let base64Audio = null;
+    if (voiceOverOnRef.current) {
+      try {
+        base64Audio = await textToSpeech(turn.response, interviewer.voiceName);
+      } catch (err) {
+        console.warn("Text-to-Speech unavailable:", err.message);
+      }
+    }
+
+    const transcriptWithReply = [...transcriptRef.current, { role: "interviewer", text: turn.response }];
     setTranscript(transcriptWithReply);
     transcriptRef.current = transcriptWithReply;
 
@@ -167,18 +242,19 @@ export default function InterviewScreen({
     }
     lastTurnSentAtRef.current = Date.now();
 
-    // Speak the reply — soft-fail on purpose: the text is already in the
-    // transcript, so an audio hiccup never blocks the conversation.
-    setTurnState("speaking");
-    try {
-      const base64Audio = await textToSpeech(turn.response, interviewer.voiceName);
-      const { analyser, finished } = prepareAudioPlayback(base64Audio, "audio/mp3");
-      setActiveAnalyser(analyser);
+    // The stop handle is stashed so a barge-in (candidate talking over the
+    // reply) or the Skip button can cut playback short — `finished`
+    // resolves either way. Voice-over is re-checked in case it was toggled
+    // off while the audio was synthesizing.
+    if (base64Audio && voiceOverOnRef.current) {
+      setTurnState("speaking");
+      const { getLevel, finished, stop } = prepareAudioPlayback(base64Audio, "audio/mp3");
+      stopPlaybackRef.current = stop;
+      setActiveLevelSource(() => getLevel); // wrapped: bare fn would be treated as an updater
       await finished;
-    } catch (err) {
-      console.warn("Text-to-Speech unavailable:", err.message);
+      stopPlaybackRef.current = null;
+      setActiveLevelSource(null);
     }
-    setActiveAnalyser(null);
     return turn;
   }
 
@@ -216,7 +292,7 @@ export default function InterviewScreen({
   useEffect(() => {
     sendTurn({
       latestEvent:
-        "session started — greet the candidate briefly, introduce yourself in character (name and role), present the problem in your own words, and invite them to talk through their initial approach before coding",
+        "session started — greet the candidate briefly and introduce yourself in character (name and role). Then set up the task in your own words: two or three spoken sentences capturing what the problem asks — do NOT read the full problem statement aloud, it's already on their screen — plus one quick example spoken naturally so they hear what goes in and what comes out. Close by asking if they have any questions before they start. A bit longer than a normal turn is fine; keep it well under 30 seconds of speech.",
       candidateEntryText: null,
       audio: null,
     });
@@ -232,6 +308,9 @@ export default function InterviewScreen({
   const voiceLoopRef = useRef(null);
   const levelFillRef = useRef(null);
   const handleUtteranceRef = useRef(null);
+  const stopPlaybackRef = useRef(null);
+  const voiceStatusRef = useRef(voiceStatus);
+  useEffect(() => { voiceStatusRef.current = voiceStatus; }, [voiceStatus]);
 
   useEffect(() => {
     const loop = createVoiceLoop({
@@ -244,19 +323,46 @@ export default function InterviewScreen({
         }
       },
       onStatusChange: (status) => setVoiceStatus(status),
+      // Barge-in: the candidate started talking while the interviewer's
+      // reply is playing → cut the TTS short, exactly like interrupting a
+      // real person. Only fires once speech has sustained past the guard,
+      // so a cough or echo blip doesn't silence the interviewer.
+      onSpeechStart: () => {
+        if (turnStateRef.current !== "speaking") return;
+        setTimeout(() => {
+          if (
+            turnStateRef.current === "speaking" &&
+            voiceStatusRef.current === "capturing" &&
+            stopPlaybackRef.current
+          ) {
+            console.info("Barge-in: candidate spoke over the reply — cutting interviewer audio.");
+            stopPlaybackRef.current();
+          }
+        }, BARGE_IN_SUSTAIN_MS);
+      },
     });
     voiceLoopRef.current = loop;
     // Mic permission denied (or no mic) → run the session as text-only.
     loop.start().catch(() => setVoiceStatus("unavailable"));
-    return () => loop.stop();
+    return () => {
+      loop.stop();
+      // Wrapping up mid-sentence must also silence the reply — otherwise
+      // the interviewer keeps talking over the scorecard screen.
+      if (stopPlaybackRef.current) stopPlaybackRef.current();
+    };
     // eslint-disable-next-line
   }, []);
 
-  // The loop only listens while the turn floor is open.
+  // The loop listens while the floor is open — including while the
+  // interviewer is speaking, so the candidate can talk over the reply
+  // (barge-in above), but at reduced sensitivity then, so echo residue
+  // can't pass for speech and cut the reply short. It only holds while a
+  // turn is being processed.
   useEffect(() => {
     const loop = voiceLoopRef.current;
     if (!loop) return;
-    if (turnState === "idle" && !errorBanner && !runningTests) loop.resume();
+    loop.setThresholdBoost(turnState === "speaking" ? BARGE_IN_THRESHOLD_BOOST : 1);
+    if ((turnState === "idle" || turnState === "speaking") && !errorBanner && !runningTests) loop.resume();
     else loop.hold();
   }, [turnState, errorBanner, runningTests]);
 
@@ -325,6 +431,17 @@ export default function InterviewScreen({
     if (voiceLoopRef.current) voiceLoopRef.current.setMuted(next);
   }
 
+  function handleToggleVoiceOver() {
+    const next = !voiceOverOn;
+    setVoiceOverOn(next);
+    // Turning it off mid-sentence also cuts the current reply short.
+    if (!next && stopPlaybackRef.current) stopPlaybackRef.current();
+  }
+
+  function handleSkipSpeech() {
+    if (stopPlaybackRef.current) stopPlaybackRef.current();
+  }
+
   // ---------------------------------------------------------------------
   // Session countdown — auto-wraps-up at zero, reusing the same flow as
   // the manual "Wrap up interview" button.
@@ -354,9 +471,14 @@ export default function InterviewScreen({
       if (turnStateRef.current !== "idle" || errorBannerRef.current || watchdogNudgeInFlightRef.current) return;
 
       const now = Date.now();
-      const silentAndIdle =
-        now - lastCodeChangeAtRef.current > WATCHDOG_SILENT_IDLE_THRESHOLD_MS &&
-        now - lastTurnSentAtRef.current > WATCHDOG_SILENT_IDLE_THRESHOLD_MS;
+      // Hard cadence cap FIRST: no check-in of any kind unless a full
+      // silence window has passed since the last turn. Without this, a
+      // trigger whose condition stays true (the filler ratio never changes
+      // while the mic is muted, for instance) re-fires on every 5s tick —
+      // the "interviewer nagging non-stop" bug. Everything below only
+      // picks the check-in's TONE.
+      if (now - lastTurnSentAtRef.current <= WATCHDOG_CHECKIN_SILENCE_MS) return;
+      const typingRecently = now - lastCodeChangeAtRef.current < WATCHDOG_CHECKIN_SILENCE_MS;
 
       const recentCandidateTexts = transcriptRef.current
         .filter((e) => e.role === "candidate")
@@ -366,16 +488,16 @@ export default function InterviewScreen({
       const fillerWithoutProgress =
         recentCandidateTexts.length >= 2 &&
         fillerRatio > WATCHDOG_FILLER_RATIO_THRESHOLD &&
-        now - lastCodeChangeAtRef.current > WATCHDOG_SILENT_IDLE_THRESHOLD_MS;
-
-      if (!silentAndIdle && !fillerWithoutProgress) return;
+        !typingRecently;
 
       watchdogNudgeInFlightRef.current = true;
-      lastTurnSentAtRef.current = now; // avoid immediately re-firing next tick
+      lastTurnSentAtRef.current = now; // next check-in is another full silence window away
       setWatchdogNudgeCount((n) => n + 1);
       const reason = fillerWithoutProgress
         ? "watchdog: high filler-word ratio with little new code across recent turns — candidate may be talking without making progress"
-        : "watchdog: candidate has been silent and not typing for a while — may be stuck";
+        : typingRecently
+          ? "watchdog check-in: the candidate has been coding silently for a while — in ONE short sentence, politely ask them to talk through what they're doing; do NOT give hints or comment on the code's direction"
+          : "watchdog check-in: the candidate has been silent and inactive for a while — check in briefly and ask how it's going; offer the smallest possible hint only if they were already stuck at the last check-in too";
       sendTurn({ latestEvent: reason, candidateEntryText: null, audio: null }, { soft: true }).finally(() => {
         watchdogNudgeInFlightRef.current = false;
       });
@@ -477,14 +599,17 @@ export default function InterviewScreen({
   }
 
   // ---------------------------------------------------------------------
-  // Transcript auto-scroll — new entries (and the typing indicator) always
-  // come into view without manual scrolling.
+  // Transcript auto-scroll — new entries, the typing indicator, and every
+  // typewriter tick keep the newest text in view. behavior "auto" on
+  // purpose: smooth scrolling would stutter at typewriter frequency.
   // ---------------------------------------------------------------------
   const transcriptBoxRef = useRef(null);
+  function scrollTranscriptToBottom() {
+    const el = transcriptBoxRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+  }
   useEffect(() => {
-    if (transcriptBoxRef.current) {
-      transcriptBoxRef.current.scrollTop = transcriptBoxRef.current.scrollHeight;
-    }
+    scrollTranscriptToBottom();
   }, [transcript, turnState]);
 
   const firstName = interviewer.name.split(" ")[0];
@@ -522,9 +647,19 @@ export default function InterviewScreen({
         voiceStatus !== "unavailable" &&
           h(
             "button",
-            { className: "btn btn-small", onClick: handleToggleMute, "aria-pressed": muted },
-            muted ? "🔇 Unmute" : "🎙 Mute"
+            { className: "btn btn-small", onClick: handleToggleMute, "aria-pressed": muted, title: "Your microphone" },
+            muted ? "🎙 Mic off" : "🎙 Mic on"
           ),
+        h(
+          "button",
+          {
+            className: "btn btn-small",
+            onClick: handleToggleVoiceOver,
+            "aria-pressed": !voiceOverOn,
+            title: "The interviewer's voice",
+          },
+          voiceOverOn ? "🔊 Voice on" : "🔇 Voice off"
+        ),
         h("button", { className: "btn btn-wrapup", onClick: onWrapUp }, "Wrap up interview")
       )
     ),
@@ -642,9 +777,10 @@ export default function InterviewScreen({
           "div",
           { className: "interviewer-header" },
           h(AvatarOrb, {
-            analyser: activeAnalyser,
+            getLevel: activeLevelSource,
             active: turnState === "speaking",
-            imageSrc: avatarSrc,
+            frames: avatarFrames,
+            videoSrc: avatarVideoSrc,
             initials: initialsOf(interviewer.name),
           }),
           h(
@@ -659,6 +795,8 @@ export default function InterviewScreen({
           "div",
           { className: `voice-pill ${voicePill.className}` },
           h("span", { className: "voice-pill-label" }, voicePill.label),
+          turnState === "speaking" &&
+            h("button", { className: "pill-skip", onClick: handleSkipSpeech, title: "Stop this reply's audio" }, "Skip ✕"),
           h(
             "span",
             { className: "level-meter", "aria-hidden": true },
@@ -679,7 +817,9 @@ export default function InterviewScreen({
               "div",
               { key: i, className: `transcript-entry role-${entry.role}` },
               h("span", { className: "role-label" }, entry.role === "interviewer" ? interviewer.name : "You"),
-              h("span", { className: "entry-text" }, entry.text)
+              entry.role === "interviewer"
+                ? h(TypedText, { text: entry.text, onGrow: scrollTranscriptToBottom, cps: voiceOverOn ? 15 : 40 })
+                : h("span", { className: "entry-text" }, entry.text)
             )
           ),
           turnState === "processing" &&

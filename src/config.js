@@ -22,8 +22,11 @@ export const GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image";
 // interviewer instruction) plus the presentation the candidate sees: a name,
 // a title, a Cloud TTS voice, and a prompt used to generate their avatar
 // portrait. All portraits share the same art direction so the setup grid
-// looks like one cast. Voices: Neural2 is Google's natural-sounding tier;
-// Erik gets a Studio voice (Cloud TTS's premium tier, most authoritative).
+// looks like one cast. Voices are Chirp3-HD — Cloud TTS's most natural,
+// conversational tier (confirmed available on this project via voices:list;
+// same ~0.8s synthesize latency as Neural2 through our proxy). Each name
+// maps to a distinct persona-matched timbre: Aoede warm/breezy, Orus firm,
+// Kore firm/direct, Charon calm/deep.
 // ---------------------------------------------------------------------------
 const AVATAR_STYLE =
   "Flat vector illustration, minimal modern style, clean geometric shapes, centered head-and-shoulders portrait, " +
@@ -35,7 +38,7 @@ export const INTERVIEWERS = [
     name: "Maya Chen",
     title: "Senior Software Engineer",
     blurb: "Warm and encouraging — gives you room to think out loud.",
-    voiceName: "en-US-Neural2-F",
+    voiceName: "en-US-Chirp3-HD-Aoede",
     description:
       "a supportive, encouraging interviewer named Maya Chen, a Senior Software Engineer. You give the candidate room to think out loud, offer warmth when they're stuck, and favor escalating, non-bottom-out hints — start vague, and only get more concrete if they're still stuck after trying.",
     avatarPrompt:
@@ -46,7 +49,7 @@ export const INTERVIEWERS = [
     name: "Victor Osei",
     title: "Staff Engineer",
     blurb: "High bar, few pleasantries — pushes on edge cases and complexity.",
-    voiceName: "en-US-Neural2-J",
+    voiceName: "en-US-Chirp3-HD-Orus",
     description:
       "a rigorous, high-bar interviewer named Victor Osei, a Staff Engineer. You push on edge cases, correctness, and complexity, rarely offer reassurance, and expect the candidate to drive the conversation — but still give escalating, non-bottom-out hints rather than the full solution when they're stuck.",
     avatarPrompt:
@@ -57,7 +60,7 @@ export const INTERVIEWERS = [
     name: "Priya Raghavan",
     title: "Engineering Manager",
     blurb: "Pragmatic and direct — cares about trade-offs and clean reasoning.",
-    voiceName: "en-US-Neural2-C",
+    voiceName: "en-US-Chirp3-HD-Kore",
     description:
       "a pragmatic, direct interviewer named Priya Raghavan, an Engineering Manager. You care most about clear trade-off reasoning and structured communication: you interrupt rambling politely, ask 'why this approach over the alternative?', and expect the candidate to state assumptions and complexity unprompted. Hints are brief and Socratic, never the answer.",
     avatarPrompt:
@@ -68,7 +71,7 @@ export const INTERVIEWERS = [
     name: "Erik Lindqvist",
     title: "Principal Engineer",
     blurb: "Calm pressure — silence, follow-ups, and 'what breaks at scale?'",
-    voiceName: "en-US-Studio-Q",
+    voiceName: "en-US-Chirp3-HD-Charon",
     description:
       "a calm but intense interviewer named Erik Lindqvist, a Principal Engineer known for pressure-testing candidates. You speak sparingly, let silences hang, and follow nearly every answer with a harder follow-up: scale limits, failure modes, pathological inputs. You are fair but skeptical by default, and your hints are the smallest possible push — never more.",
     avatarPrompt:
@@ -122,10 +125,18 @@ function poolForDifficulty(tier) {
   return PROBLEM_BANK.filter((p) => p.difficulty === tier);
 }
 
+// DEMO OVERRIDE: hardcode every session to one problem. Set to null to
+// restore the weighted randomizer.
+export const FORCED_PROBLEM_ID = "two-sum";
+
 // Picks a difficulty tier by weight, then a random problem from that tier's
 // pool. Exported separately from the pure `pickWeighted` utility so callers
 // don't need to know about the google-hard folding rule above.
 export function pickWeightedProblem() {
+  if (FORCED_PROBLEM_ID) {
+    const forced = PROBLEM_BANK.find((p) => p.id === FORCED_PROBLEM_ID);
+    if (forced) return forced;
+  }
   const tier = pickWeighted(DIFFICULTY_WEIGHTS).difficulty;
   const pool = poolForDifficulty(tier);
   return pool[Math.floor(Math.random() * pool.length)];

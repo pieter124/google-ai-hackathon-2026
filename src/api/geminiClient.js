@@ -153,8 +153,16 @@ Criteria tracked so far this session (score 1-5, higher is better; ids missing h
 Full transcript so far: ${JSON.stringify(transcript)}
 Latest event: ${latestEvent}${audio ? "\nThe candidate's raw spoken audio for this turn is attached as well — factor in tone, hesitation, and fluency, not just the words." : ""}
 
-Respond as the interviewer would in exactly ONE turn, and keep it SPOKEN-length
-— a few sentences at most, since your reply is read aloud. If the candidate
+Respond as the interviewer would in exactly ONE turn. Your reply is spoken
+aloud by a text-to-speech voice, so write it the way a real person talks in
+conversation, not the way anyone writes: contractions, natural spoken rhythm,
+and — where it fits the persona — brief verbal reactions ("Hmm.", "Okay.",
+"Right...") and thinking pauses marked with ellipses. Usually one to three
+short sentences; never markdown, bullet points, code blocks, emoji, or stage
+directions. Use ONLY plain speakable words: no brackets, parentheses,
+backticks, quotes around identifiers, or code syntax of any kind — say code
+aloud the way an engineer would in conversation ("nums of i", "i plus one",
+"big O of n squared"). If the candidate
 just ran code, react to the actual pass/fail results and their code, don't ask
 about something already visible. If they explained their approach, follow up
 on anything vague or ask about complexity/edge cases. If this is a proactive

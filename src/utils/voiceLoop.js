@@ -36,7 +36,11 @@ function pickRecorderMimeType() {
 //   "capturing"  — candidate is talking, recorder running
 //   "held"       — paused by the caller (turn processing / TTS playing)
 //   "muted"      — paused by the user
-export function createVoiceLoop({ onUtterance, onLevel, onStatusChange }) {
+//
+// onSpeechStart fires the moment sustained speech is detected (capture
+// begins) — the caller uses it for barge-in: cutting the interviewer's TTS
+// short when the candidate starts talking over it.
+export function createVoiceLoop({ onUtterance, onLevel, onStatusChange, onSpeechStart }) {
   let stream = null;
   let sourceNode = null;
   let analyser = null;
@@ -54,6 +58,14 @@ export function createVoiceLoop({ onUtterance, onLevel, onStatusChange }) {
   let muted = false;
   let stopped = false;
   let status = null;
+  // Capture-START threshold multiplier. Raised (via setThresholdBoost) while
+  // the interviewer's reply is playing: echo cancellation removes most of
+  // the speaker output from the mic but not all of it, and at 1x the
+  // residue could pass for speech and cut the reply short. Genuine
+  // barge-in speech close to the mic clears the boosted bar easily. Only
+  // capture START is boosted — once capturing, end-of-utterance detection
+  // stays at 1x so the tail of a real interruption isn't chopped.
+  let thresholdBoost = 1;
 
   function setStatus(next) {
     if (status !== next) {
@@ -102,7 +114,7 @@ export function createVoiceLoop({ onUtterance, onLevel, onStatusChange }) {
     }
 
     if (!capturing) {
-      if (rms >= SPEECH_RMS_THRESHOLD) {
+      if (rms >= SPEECH_RMS_THRESHOLD * thresholdBoost) {
         aboveMs += POLL_MS;
         if (aboveMs >= SPEECH_START_MS) beginCapture();
       } else {
@@ -136,6 +148,7 @@ export function createVoiceLoop({ onUtterance, onLevel, onStatusChange }) {
     aboveMs = 0;
     belowMs = 0;
     setStatus("capturing");
+    if (onSpeechStart) onSpeechStart();
   }
 
   function stopRecorder() {
@@ -192,6 +205,10 @@ export function createVoiceLoop({ onUtterance, onLevel, onStatusChange }) {
     idleStatus();
   }
 
+  function setThresholdBoost(next) {
+    thresholdBoost = next;
+  }
+
   function stop() {
     stopped = true;
     if (pollTimer) clearInterval(pollTimer);
@@ -200,5 +217,5 @@ export function createVoiceLoop({ onUtterance, onLevel, onStatusChange }) {
     if (stream) stream.getTracks().forEach((track) => track.stop());
   }
 
-  return { start, hold, resume, setMuted, stop };
+  return { start, hold, resume, setMuted, setThresholdBoost, stop };
 }
