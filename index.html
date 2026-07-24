@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mock Interview Agent</title>
+  <link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+  <div id="root"></div>
+  <!-- Entry point is a plain ES module — no bundler, no build step. The
+       browser resolves every `import` (our own files + the CDN packages
+       they pull in) natively. Must be served over http(s):// (e.g.
+       `python3 -m http.server`), not opened via file://, since module
+       imports and Web Workers require it. -->
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
