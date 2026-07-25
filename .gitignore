@@ -1,3 +1,13 @@
+# dependencies
 node_modules/
+
+# secrets & local env
 .env
+
+# editor / OS noise
 .history/
+.DS_Store
+
+# AI tooling (Claude Code)
+.claude/
+CLAUDE.md

@@ -1,14 +1,12 @@
-// One-time, pre-demo asset generation: for each interviewer, create a
-// portrait (same prompt the app uses) plus a short Veo talking-loop video
-// animated FROM that exact portrait, and save both under assets/avatars/.
-// The app prefers these static assets over runtime generation, and plays
-// the loop while the interviewer's TTS speaks.
+// One-time asset generation: for each interviewer, create a portrait plus a
+// short Veo talking loop animated from it, saved under assets/avatars/. The app
+// prefers these over runtime generation and plays the loop while the TTS speaks.
 //
 // Usage:
-//   node scripts/generate-avatar-videos.mjs maya          # one character
-//   node scripts/generate-avatar-videos.mjs               # the whole cast
+//   node scripts/generate-avatar-videos.mjs maya   # one character
+//   node scripts/generate-avatar-videos.mjs        # the whole cast
 //
-// Veo bills per second of generated video — run deliberately.
+// Veo bills per second of video — run deliberately.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

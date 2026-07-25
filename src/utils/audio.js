@@ -1,6 +1,4 @@
-// Converts a recorded audio Blob (from MediaRecorder) into the raw base64
-// payload used both for Gemini's native audio-understanding input and for
-// the Cloud Speech-to-Text fallback.
+// Recorded Blob → raw base64, for both Gemini's audio input and the STT fallback.
 export function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -10,13 +8,12 @@ export function blobToBase64(blob) {
   });
 }
 
-// One shared AudioContext for the page's lifetime — browsers cap how many
-// can exist at once, and we create a fresh <audio> element per reply anyway.
+// One shared AudioContext for the page's lifetime — browsers cap how many can
+// exist at once.
 let sharedAudioContext = null;
 
-// Exported so the hands-free voice loop (utils/voiceLoop.js) can hang its
-// mic AnalyserNode off the same context the TTS playback graph uses — one
-// context for the whole page, unlocked once by the Start-interview click.
+// Shared so the voice loop's mic analyser and the amplitude decode below use
+// the same context, unlocked once by the Start-interview click.
 export function getSharedAudioContext() {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) return null;
@@ -24,9 +21,8 @@ export function getSharedAudioContext() {
   return sharedAudioContext;
 }
 
-// Resume the shared context from inside a genuine user gesture. The context
-// feeds the hands-free mic analyser and the offline amplitude decode below;
-// resuming it early (Start-interview click, text submits) keeps both live.
+// Resume the shared context from inside a user gesture (Start click, text
+// submit) so the mic analyser and amplitude decode stay live.
 export function unlockAudioContext() {
   const ctx = getSharedAudioContext();
   if (ctx && ctx.state === "suspended") {
@@ -34,12 +30,9 @@ export function unlockAudioContext() {
   }
 }
 
-// Offline amplitude envelope: RMS per 50ms window of the decoded reply, so
-// the avatar can animate to the voice WITHOUT routing playback through the
-// Web Audio graph. Routing through the graph is exactly what broke replies:
-// Chrome's echo canceller only subtracts audio played by plain media
-// elements, so graph-routed TTS leaked into the mic, the hands-free loop
-// heard "speech", and barge-in cut the interviewer off half a second in.
+// Offline amplitude envelope (RMS per 50ms window) so the avatar can animate to
+// the voice without routing playback through Web Audio. Routing it through the
+// graph would leak past echo cancellation into the mic and trigger false barge-in.
 const ENVELOPE_HZ = 20;
 
 async function decodeAmplitudeEnvelope(base64Audio) {
@@ -62,15 +55,11 @@ async function decodeAmplitudeEnvelope(base64Audio) {
   return envelope;
 }
 
-// Prepares a base64-encoded audio reply (MP3 from Cloud Text-to-Speech) for
-// playback through a PLAIN <audio> element — deliberately not Web Audio, so
-// echo cancellation keeps it out of the mic (see above). `getLevel()`
-// returns the voice's current amplitude (from the offline envelope, indexed
-// by playback position) for the avatar animation. `finished` resolves
-// exactly once, whether playback completed, errored, was blocked by the
-// browser's autoplay policy, or was cut short by `stop()` (barge-in / Skip)
-// — it never rejects, so a TTS/audio hiccup can never strand the UI (the
-// interviewer's line is always shown as text too).
+// Plays a base64 MP3 reply through a plain <audio> element (not Web Audio, so
+// echo cancellation keeps it out of the mic). `getLevel()` returns the current
+// amplitude from the offline envelope for the avatar. `finished` resolves once
+// however playback ends (completed, errored, autoplay-blocked, or stopped) and
+// never rejects, so an audio hiccup can't strand the UI.
 export function prepareAudioPlayback(base64Audio, mimeType = "audio/mp3") {
   let audio;
   try {

@@ -8,11 +8,8 @@
 </head>
 <body>
   <div id="root"></div>
-  <!-- Entry point is a plain ES module — no bundler, no build step. The
-       browser resolves every `import` (our own files + the CDN packages
-       they pull in) natively. Must be served over http(s):// (e.g.
-       `python3 -m http.server`), not opened via file://, since module
-       imports and Web Workers require it. -->
+  <!-- Plain ES module entry point — no build step. Must be served over
+       http(s):// (not file://) for module imports and Web Workers to work. -->
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>

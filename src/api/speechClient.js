@@ -11,17 +11,9 @@ async function fetchWithTimeout(url, options, timeoutMs = 15000) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// GOOGLE API CALL SITE — Cloud Speech-to-Text (via the ADC-authenticated
-// /api/speech-to-text proxy, see server/server.js)
-//
-// Fallback path only: Agent 1 prefers sending the candidate's recorded audio
-// straight into the Gemini reasoning call (native audio understanding — see
-// geminiClient.js). Gemini's documented audio-input formats don't include
-// webm/opus, which is what Chrome's MediaRecorder actually produces, so if
-// that direct call 400s, InterviewScreen falls back to this call to get a
-// text transcript and retries the same Gemini turn with text instead.
-// ---------------------------------------------------------------------------
+// Cloud Speech-to-Text, via the ADC-authenticated /api/speech-to-text proxy.
+// Fallback only: we prefer sending audio straight to Gemini, and reach here
+// when Gemini rejects the browser's webm/opus recording format.
 export async function speechToText(base64Audio) {
   const res = await fetchWithTimeout("/api/speech-to-text", {
     method: "POST",
@@ -53,11 +45,10 @@ export async function speechToText(base64Audio) {
   return transcript;
 }
 
-// The interviewer's reply sometimes carries code-ish notation (backticks,
-// brackets, operators) despite the prompt asking for plain speech — and TTS
-// reads those symbols out loud ("open bracket... comma..."). This rewrites
-// the text into what an engineer would actually SAY, and strips the rest.
-// Only the audio gets this treatment; the transcript shows the original.
+// The reply sometimes carries code-ish notation despite the prompt asking for
+// plain speech, and TTS would read the symbols out loud ("open bracket...").
+// Rewrite it into what an engineer would say; only the audio is affected, the
+// transcript keeps the original.
 function toSpeakableText(text) {
   let t = text;
   t = t.replace(/```[\s\S]*?```/g, " "); // never read code blocks aloud
@@ -71,7 +62,7 @@ function toSpeakableText(text) {
       .replace(/·/g, " times ");
     return ` big O of ${spoken} `;
   });
-  // Operators → words (before the symbol sweep below eats them).
+  // Operators → words, before the symbol sweep below eats them.
   t = t
     .replace(/===|==/g, " equals ")
     .replace(/!==|!=/g, " not equal to ")
@@ -92,19 +83,12 @@ function toSpeakableText(text) {
   return t;
 }
 
-// ---------------------------------------------------------------------------
-// GOOGLE API CALL SITE — Cloud Text-to-Speech (via the ADC-authenticated
-// /api/text-to-speech proxy, see server/server.js)
-//
-// Agent 1's voice output. Returns base64-encoded MP3 bytes; the caller
-// (InterviewScreen, via utils/audio.js's prepareAudioPlayback) plays it and
-// always keeps the text transcript rendered too, in case autoplay is
-// blocked.
-// ---------------------------------------------------------------------------
+// Cloud Text-to-Speech, via the ADC-authenticated /api/text-to-speech proxy.
+// The interviewer's voice. Returns base64 MP3; the caller always keeps the
+// transcript rendered too, in case autoplay is blocked.
 export async function textToSpeech(rawText, voiceName = "en-US-Chirp3-HD-Aoede") {
   const text = toSpeakableText(rawText);
-  // 30s rather than the default 15s: the opening reads the whole problem
-  // aloud, and synthesizing ~1min of speech can run long.
+  // 30s rather than the default: the opening reads the whole problem aloud.
   const res = await fetchWithTimeout(
     "/api/text-to-speech",
     {

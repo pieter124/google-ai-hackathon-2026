@@ -1,17 +1,13 @@
 import { GEMINI_MODEL, CRITERIA_DEFINITIONS } from "../config.js";
 import { mergeCriteriaLog } from "../utils/criteria.js";
 
-// Same-origin proxy served by server/server.js — it attaches either a plain
-// Gemini API key or an Application Default Credentials token and forwards to
-// Google, so no API key travels through (or lives in) the browser. Voice
-// output goes through Google Cloud Text-to-Speech instead (see
-// api/speechClient.js), not through this endpoint.
+// Same-origin proxy (server/server.js) that attaches auth and forwards to
+// Google, so no API key lives in the browser.
 const GEMINI_PROXY_ENDPOINT = "/api/gemini/generate";
 const VALID_CRITERIA_IDS = CRITERIA_DEFINITIONS.map((c) => c.id).join(", ");
 
-// Deliberately harsh calibration, shared by every prompt that scores the
-// candidate (per-turn, checkpoint, scorecard) so the live matrix and the
-// final report can't drift apart in strictness.
+// Shared by every scoring prompt (turn, checkpoint, scorecard) so the live
+// matrix and the final report stay consistent in strictness.
 const GRADING_RUBRIC = `Grade against a real top-tier hiring bar, strictly:
 - 1 = well below bar, 2 = below bar, 3 = meets the bar with reservations, 4 = clearly strong, 5 = exceptional and rare — most sessions should never see a 5.
 - Actively penalize: missing or hand-wavy complexity discussion, unhandled edge cases, rambling or unclear communication, needing proactive nudges, and code that doesn't pass the tests.
@@ -19,9 +15,8 @@ const GRADING_RUBRIC = `Grade against a real top-tier hiring bar, strictly:
 
 const LANGUAGE_LABELS = { javascript: "JavaScript", python: "Python" };
 
-// One shared textual rendering of the problem (description + LeetCode-style
-// examples and constraints) so every agent reasons from the same statement
-// the candidate sees on screen.
+// Renders the problem the way the candidate sees it, so every prompt reasons
+// from the same statement.
 function describeProblem(problem) {
   const examples = (problem.examples || [])
     .map(
@@ -37,10 +32,8 @@ Constraints:
 ${constraints}`;
 }
 
-// Thrown on any non-2xx Gemini response, carrying the HTTP status so callers
-// can tell "bad request" (e.g. an audio MIME type Gemini won't accept) apart
-// from a timeout or outage — that distinction is what drives the
-// native-audio-in → Speech-to-Text fallback in InterviewScreen.
+// Carries the HTTP status so callers can tell a 400 (e.g. an unsupported audio
+// format) from a timeout — that's what drives the audio→STT fallback.
 export class GeminiHttpError extends Error {
   constructor(message, status) {
     super(message);
@@ -49,9 +42,8 @@ export class GeminiHttpError extends Error {
   }
 }
 
-// fetch() has no built-in timeout; without one, a stalled request would leave
-// the "processing"/"Thinking..." spinner stuck forever, violating the "never
-// leave the UI silently stuck" requirement.
+// fetch() has no built-in timeout; without one a stalled request leaves the
+// "Thinking..." spinner stuck forever.
 async function fetchWithTimeout(url, options, timeoutMs = 20000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -78,9 +70,8 @@ async function postGenerateContent(model, body, timeoutMs) {
   return res.json();
 }
 
-// Gemini is asked for responseMimeType "application/json" so this should
-// already be clean JSON, but models occasionally wrap output in markdown
-// code fences anyway — strip those defensively before parsing.
+// We ask for JSON, but the model occasionally wraps it in markdown fences —
+// strip those before parsing.
 function parseJsonResponse(rawText) {
   let text = (rawText || "").trim();
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -97,8 +88,8 @@ function extractText(geminiData) {
   return parts.map((p) => p.text || "").join("");
 }
 
-// Keeps only recognized criterion ids with a valid 1-5 score, so a model
-// hallucinating an unknown id or a malformed score can't corrupt the log.
+// Keep only known criterion ids with a valid 1-5 score, so a hallucinated id
+// or malformed score can't corrupt the log.
 function sanitizeCriteriaUpdate(raw) {
   const validIds = new Set(CRITERIA_DEFINITIONS.map((c) => c.id));
   const clean = {};
@@ -111,24 +102,11 @@ function sanitizeCriteriaUpdate(raw) {
   return clean;
 }
 
-// ---------------------------------------------------------------------------
-// GOOGLE API CALL SITE — Gemini (generativelanguage.googleapis.com)
-//
-// AGENT 1 (Interviewer, per turn). Drives the in-character interviewer for
-// voice turns, Run Code reactions, AND Agent 3's (Watchdog) proactive
-// nudges — all three funnel through this one function with a one-line
-// `latestEvent` description of what just happened, which is what keeps
-// persona and the running criteria consistent no matter which trigger fired.
-//
-// Voice turns prefer sending the candidate's raw recorded audio directly as
-// an inline_data part (native audio understanding — richer than transcribed
-// text alone, since Gemini can factor in tone/hesitation/fluency). Chrome's
-// MediaRecorder only produces audio/webm, which is NOT in Gemini's
-// documented supported input list (wav/mp3/aiff/aac/ogg/flac) — so this may
-// or may not be accepted. If Gemini 400s on it, the caller (InterviewScreen)
-// catches the GeminiHttpError, falls back to the Cloud Speech-to-Text call,
-// and retries this same function with `candidateText` instead of `audio`.
-// ---------------------------------------------------------------------------
+// The interviewer, per turn. Drives voice turns, Run Code reactions, and the
+// watchdog's proactive nudges — all funnel through here with a one-line
+// `latestEvent`, which keeps persona and criteria consistent across triggers.
+// Voice turns attach the raw recording for native audio understanding; if
+// Gemini 400s on the format, the caller falls back to STT and retries with text.
 export async function callGeminiInterviewTurn({
   currentProblem,
   personaDescription,
@@ -196,15 +174,8 @@ Return ONLY valid JSON in this exact shape, no other text:
   };
 }
 
-// ---------------------------------------------------------------------------
-// GOOGLE API CALL SITE — Gemini, AGENT 2 (Aggregator).
-//
-// Fires on a timer independent of turns (see InterviewScreen's checkpoint
-// interval), not on a click. Looks at the whole window since the last
-// checkpoint — including stretches where no turn was sent at all — so slow
-// drift and long idle windows still get analyzed and logged, not silently
-// skipped.
-// ---------------------------------------------------------------------------
+// The aggregator. Runs on a timer and reviews the whole window since the last
+// checkpoint, so slow drift and long idle stretches still get logged.
 export async function callGeminiCheckpoint({ currentProblem, language, code, transcriptSlice, codeChangeSummary, criteriaLog }) {
   const prompt = `You are the Aggregator for a live coding interview — an independent, periodic checkpoint, not a reply to any one turn.
 Problem:
@@ -234,14 +205,8 @@ Return ONLY valid JSON in this exact shape, no other text:
   return { criteriaUpdate: sanitizeCriteriaUpdate(parsed.criteriaUpdate) };
 }
 
-// ---------------------------------------------------------------------------
-// GOOGLE API CALL SITE — Gemini, end-of-session report.
-//
-// Merges the Interviewer's per-turn criteria updates and the Aggregator's
-// windowed checkpoints (the shared criteriaLog) — not raw audio/transcript —
-// into the final scorecard, alongside locally-computed filler stats and the
-// sandboxed test results.
-// ---------------------------------------------------------------------------
+// End-of-session report. Merges the criteriaLog, local filler stats, and the
+// sandboxed test results into the final scorecard.
 export async function callGeminiScorecard({
   currentProblem,
   language,

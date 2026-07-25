@@ -1,29 +1,22 @@
 import { GEMINI_IMAGE_MODEL } from "../config.js";
 
-// ---------------------------------------------------------------------------
-// GOOGLE API CALL SITE — Gemini image generation, via the same same-origin
-// /api/gemini/generate proxy every reasoning call uses (the server just
-// forwards whatever `model` we pass). Each interviewer's portrait is
-// generated at most once per browser: the resulting data URI is cached in
-// localStorage, so refreshes (and every later session) render instantly and
-// cost nothing. Callers are expected to treat any failure here as cosmetic —
-// SetupScreen falls back to an initials avatar and never blocks on this.
-// ---------------------------------------------------------------------------
+// Interviewer portraits via the same /api/gemini/generate proxy the reasoning
+// calls use. Each portrait is generated at most once per browser and cached in
+// localStorage. Any failure is cosmetic — callers fall back to initials.
 const CACHE_PREFIX = "avatar:v1:";
 
-// Image generation is slow (~5-20s); comfortably above that, but not forever.
+// Image generation runs ~5-20s.
 const TIMEOUT_MS = 45000;
 
-// De-dupes concurrent requests for the same character (e.g. the setup screen
-// unmounting and remounting mid-generation) so one portrait is never paid
-// for twice.
+// De-dupe concurrent requests for the same character so a portrait is never
+// generated twice.
 const inFlight = new Map();
 
 function readCache(id) {
   try {
     return localStorage.getItem(CACHE_PREFIX + id);
   } catch {
-    return null; // storage disabled — just regenerate next time
+    return null; // storage disabled — regenerate next time
   }
 }
 
@@ -31,15 +24,12 @@ function writeCache(id, dataUri) {
   try {
     localStorage.setItem(CACHE_PREFIX + id, dataUri);
   } catch {
-    // Quota exceeded or storage disabled — the avatar still renders this
-    // session, it just won't be cached.
+    // Quota exceeded or storage disabled — the avatar still renders, uncached.
   }
 }
 
-// Avatars render at 56px but come back from the model at ~1024px / ~500KB
-// of base64 — downscaling before caching keeps 12 cached frames (4 cast
-// members × 3 frames) comfortably inside the ~5MB localStorage quota.
-// Falls back to the original on any canvas hiccup.
+// The model returns ~1024px images; avatars render at 56px. Downscaling before
+// caching keeps all 12 frames inside the ~5MB localStorage quota.
 function downscaleDataUri(dataUri, size = 256, quality = 0.85) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -92,12 +82,10 @@ function generateAvatar(character) {
   return callImageModel([{ text: character.avatarPrompt }]);
 }
 
-// ---------------------------------------------------------------------------
-// Pre-generated static assets (scripts/generate-avatar-videos.mjs) win over
-// runtime generation: if assets/avatars/<id>.jpg exists it IS the portrait
-// (and the Veo talking loop <id>-talking.mp4 was animated from that exact
-// image, so face and video always match). Probed once per id, then cached.
-// ---------------------------------------------------------------------------
+// Pre-generated static assets (scripts/generate-avatar-videos.mjs) take
+// priority over runtime generation: if assets/avatars/<id>.jpg exists it's the
+// portrait, and its talking loop was animated from that exact image so they
+// always match. Probed once per id, then cached.
 const assetProbes = new Map();
 
 function probeAsset(url) {
@@ -112,14 +100,13 @@ function probeAsset(url) {
   return assetProbes.get(url);
 }
 
-// Resolves to the URL of the character's pre-generated talking-loop video,
-// or null when none was generated — callers fall back to frame animation.
+// URL of the character's pre-generated talking loop, or null — callers fall
+// back to frame animation.
 export function getAvatarVideoUrl(character) {
   return probeAsset(`/assets/avatars/${character.id}-talking.mp4`);
 }
 
-// Variant generation needs the base image as raw base64 even when the base
-// is a static asset URL rather than a data URI.
+// Variant generation needs the base image as base64, even when it's an asset URL.
 async function asDataUri(src) {
   if (src.startsWith("data:")) return src;
   const blob = await (await fetch(src)).blob();
@@ -131,10 +118,8 @@ async function asDataUri(src) {
   });
 }
 
-// Resolves to an image source for the character's portrait — a static asset
-// URL when one was pre-generated, else from cache, else freshly generated
-// (and cached). Rejects only when generation genuinely failed; callers show
-// their initials fallback in that case.
+// The character's portrait: a static asset if one exists, else cache, else
+// freshly generated and cached. Rejects only on genuine failure.
 export async function getAvatar(character) {
   const asset = await probeAsset(`/assets/avatars/${character.id}.jpg`);
   if (asset) return asset;
@@ -154,13 +139,9 @@ export async function getAvatar(character) {
   return inFlight.get(character.id);
 }
 
-// ---------------------------------------------------------------------------
-// Animation frames — the same character re-generated by the image model in
-// two more poses via image editing (base portrait passed back in as input,
-// verified to stay near pixel-identical). AvatarOrb swaps these live off the
-// speech amplitude: mouth-open while the voice is loud, eyes-closed for
-// blinks. Cached like the base portrait, generated lazily on first use.
-// ---------------------------------------------------------------------------
+// Animation frames — the base portrait re-generated in two more poses via
+// image editing. AvatarOrb swaps these off the speech amplitude: mouth-open
+// while the voice is loud, eyes-closed for blinks. Cached and generated lazily.
 const VARIANT_PROMPTS = {
   talking:
     "Edit this illustration: the EXACT same character, art style, colors, framing and background — the only change is the mouth is open mid-speech, as if actively talking. Keep everything else identical.",
@@ -176,9 +157,8 @@ export function getAvatarVariant(character, variant) {
   if (!inFlight.has(flightKey)) {
     const promise = getAvatar(character)
       .then(async (base) => {
-        // The cache key carries the portrait's provenance: a variant built
-        // from the runtime-generated portrait must never be served next to
-        // a pre-generated asset portrait (different face) — and vice versa.
+        // Key by provenance so a variant of the generated portrait is never
+        // served against the asset portrait (different face) or vice versa.
         const cacheKey = base.startsWith("data:") ? flightKey : `${flightKey}@asset`;
         const cached = readCache(cacheKey);
         if (cached) return cached;

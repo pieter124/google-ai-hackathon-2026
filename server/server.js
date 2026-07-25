@@ -1,19 +1,7 @@
-// ---------------------------------------------------------------------------
-// Thin ADC-authenticated proxy + static file server.
-//
-// The frontend used to call Google's Gemini / Speech-to-Text / Text-to-Speech
-// REST APIs directly from the browser with an API key in the URL
-// (`?key=...`). That key had to live in client-side source, which is why
-// config.js used to warn it must be referrer-restricted.
-//
-// Now the browser only ever talks to this same-origin server. This process
-// holds no secret of its own — it obtains a short-lived OAuth token via
-// Application Default Credentials (see googleAuth.js) and attaches it to
-// each upstream request. The three routes below are intentionally thin:
-// each one takes the exact JSON body the frontend already builds (unchanged
-// from before), forwards it to the real Google endpoint with that token, and
-// pipes the response straight back.
-// ---------------------------------------------------------------------------
+// ADC-authenticated proxy plus static file server. The browser only talks to
+// this same-origin server, which attaches a short-lived OAuth token (or an API
+// key for Gemini) and forwards each request to the real Google endpoint, so no
+// credential ever reaches the client.
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,12 +12,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, "..");
 
 const app = express();
-app.use(express.json({ limit: "20mb" })); // base64 audio clips push past express's small default limit
+app.use(express.json({ limit: "20mb" })); // base64 audio clips exceed the default limit
 
-// Forwards `body` to `url` with an ADC-derived bearer token, and mirrors
-// whatever Google returns (status + body) straight back to the caller so
-// the frontend's existing `if (!res.ok)` error handling keeps working
-// unchanged.
+// Forwards `body` to `url` with an ADC bearer token and mirrors Google's
+// status + body straight back.
 async function proxy(res, url, body) {
   try {
     const client = await getAuthClient();
@@ -39,18 +25,16 @@ async function proxy(res, url, body) {
     if (err instanceof AdcError) {
       return res.status(500).json({ error: err.message });
     }
-    // google-auth-library (via gaxios) throws on non-2xx responses with the
-    // upstream status/body attached — surface those rather than a bare 500.
+    // gaxios throws on non-2xx with the upstream status/body attached — surface
+    // those rather than a bare 500.
     const status = err.response?.status || 500;
     const data = err.response?.data;
     res.status(status).json(data || { error: err.message });
   }
 }
 
-// Forwards `body` to a generativelanguage.googleapis.com model using a plain
-// AI Studio API key (?key=...) instead of an ADC bearer token — the
-// alternative path used when GEMINI_API_KEY is set. Mirrors `proxy()`'s
-// status/body passthrough so the frontend's error handling stays unchanged.
+// Same as proxy(), but authenticates to generativelanguage.googleapis.com with
+// a plain AI Studio API key (?key=...) — the path used when GEMINI_API_KEY is set.
 async function proxyWithApiKey(res, url, body) {
   try {
     const upstream = await fetch(`${url}?key=${GEMINI_API_KEY}`, {
@@ -58,10 +42,9 @@ async function proxyWithApiKey(res, url, body) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    // Google occasionally answers errors with non-JSON (HTML, plain text).
-    // Parsing defensively keeps the real upstream status flowing through —
-    // the frontend's audio→Speech-to-Text fallback keys on seeing a 400,
-    // which a blanket 500 here would mask.
+    // Google sometimes answers errors with non-JSON (HTML, plain text). Parse
+    // defensively so the real upstream status flows through — the audio→STT
+    // fallback keys on the 400, which a blanket 500 would mask.
     const text = await upstream.text();
     let data;
     try {
@@ -75,16 +58,10 @@ async function proxyWithApiKey(res, url, body) {
   }
 }
 
-// GOOGLE API CALL SITE 1 — Gemini reasoning (interview turns, checkpoints,
-// scorecard). Two auth modes, picked at request time:
-//   - GEMINI_API_KEY set: generativelanguage.googleapis.com with a plain AI
-//     Studio API key, no GCP project/ADC needed for this route.
-//   - otherwise: Vertex AI's OAuth-based endpoint over ADC (GCP_PROJECT_ID
-//     required).
-// Same request/response shape either way (contents/generationConfig in,
-// candidates[].content.parts[].text out). Pass `model` in the body to
-// override the default GEMINI_MODEL from src/config.js. Voice output does
-// NOT go through this route — see /api/text-to-speech below.
+// Gemini reasoning (interview turns, checkpoints, scorecard). Two auth modes,
+// picked per request: an AI Studio API key when GEMINI_API_KEY is set, else
+// Vertex AI over ADC. Same request/response shape either way; pass `model` in
+// the body to override the default.
 app.post("/api/gemini/generate", async (req, res) => {
   const { model, ...body } = req.body || {};
   const modelId = model || GEMINI_MODEL;
@@ -105,25 +82,18 @@ app.post("/api/gemini/generate", async (req, res) => {
   await proxy(res, url, body);
 });
 
-// GOOGLE API CALL SITE 2 — Cloud Speech-to-Text. Fallback path (used when
-// Gemini's native audio-understanding input rejects the browser's recording
-// format). Unlike Gemini, this API rejects API-key auth outright ("API keys
-// are not supported by this API" — confirmed against the live API, not just
-// undocumented) — it always needs a real OAuth2 principal, so this route
-// always goes through ADC regardless of whether GEMINI_API_KEY is set.
+// Cloud Speech-to-Text — the fallback when Gemini rejects the browser's
+// recording format. This API rejects API keys, so it's always ADC.
 app.post("/api/speech-to-text", async (req, res) => {
   await proxy(res, "https://speech.googleapis.com/v1/speech:recognize", req.body);
 });
 
-// GOOGLE API CALL SITE 3 — Cloud Text-to-Speech. Agent 1's voice output.
-// Same story as Speech-to-Text above: API keys aren't accepted by this API
-// at all, so it's ADC-only no matter what GEMINI_API_KEY is set to.
+// Cloud Text-to-Speech — the interviewer's voice. ADC only, same as STT.
 app.post("/api/text-to-speech", async (req, res) => {
   await proxy(res, "https://texttospeech.googleapis.com/v1/text:synthesize", req.body);
 });
 
-// Quick way to confirm auth is wired up correctly without going through the
-// whole interview flow: `curl localhost:8000/api/health`.
+// Confirms auth is wired up without running a full interview: curl /api/health.
 app.get("/api/health", async (_req, res) => {
   if (GEMINI_API_KEY) {
     return res.json({ ok: true, authMode: "api-key" });
@@ -137,9 +107,8 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
-// Serves the existing static frontend (index.html, src/**) — the same files
-// `npx serve .` used to serve — from this one process, so the frontend and
-// the /api/* proxy share an origin and no CORS setup is needed.
+// Serve the static frontend from the same process, so it shares an origin with
+// the /api/* proxy and needs no CORS setup.
 app.use(express.static(REPO_ROOT));
 
 app.listen(PORT, () => {

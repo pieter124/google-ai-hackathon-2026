@@ -1,5 +1,5 @@
-// Structural equality for comparing a candidate's sandboxed return value
-// against a test case's `expected` value (arrays, plain objects, primitives).
+// Structural equality for comparing a sandboxed return value against a test
+// case's expected value (arrays, plain objects, primitives).
 export function deepEqual(a, b) {
   if (Object.is(a, b)) return true;
   if (Array.isArray(a) || Array.isArray(b)) {

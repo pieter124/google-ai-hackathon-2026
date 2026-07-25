@@ -1,18 +1,10 @@
 import { useEffect, useRef, h } from "../reactRuntime.js";
 
-// The interviewer's animated face: their generated portrait inside a ring
-// that pulses with the spoken reply's amplitude, with two extra generated
-// frames layered on top — mouth-open (shown while the voice is actually
-// loud, so the mouth flaps in time with speech) and eyes-closed (flashed
-// briefly on a randomized blink timer, so they look alive even in silence).
-// Amplitude comes from `getLevel` (utils/audio.js's offline envelope, keyed
-// to playback position — NOT a live analyser, see the note there about echo
-// cancellation). Frames fade via direct DOM opacity writes from a
-// requestAnimationFrame loop — this moves at speech frequency and would be
-// wasteful as React state.
-//
-// Mouth thresholds have hysteresis (open above OPEN, close below CLOSE) so
-// the mouth doesn't strobe at the threshold boundary.
+// The interviewer's animated face: the portrait inside a ring that pulses with
+// the reply's amplitude, plus mouth-open and eyes-closed frames layered on top.
+// Amplitude comes from `getLevel` (audio.js's offline envelope). Frames fade via
+// direct DOM opacity writes from a rAF loop, too hot for React state. Mouth
+// thresholds have hysteresis so the mouth doesn't strobe at the boundary.
 const MOUTH_OPEN_LEVEL = 0.07;
 const MOUTH_CLOSE_LEVEL = 0.04;
 const BLINK_MIN_GAP_MS = 2500;
@@ -27,16 +19,14 @@ export default function AvatarOrb({ getLevel, active, frames, videoSrc, initials
   const rafRef = useRef(null);
   const mouthOpenRef = useRef(false);
 
-  // Pre-generated Veo talking loop, when one exists: it fades in and plays
-  // (muted) for as long as the interviewer is speaking, then freezes and
-  // fades back to the still portrait. Takes precedence over the mouth-frame
-  // flap, which stays as the fallback for characters without a clip.
+  // Veo talking loop, when one exists: plays muted while the interviewer speaks,
+  // then fades back to the still portrait. Takes precedence over the mouth flap.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     if (active) {
       video.style.opacity = "1";
-      video.play().catch(() => {}); // muted+playsInline, so this should never block
+      video.play().catch(() => {}); // muted + playsInline, so this shouldn't block
     } else {
       video.style.opacity = "0";
       video.pause();
@@ -58,7 +48,7 @@ export default function AvatarOrb({ getLevel, active, frames, videoSrc, initials
       return;
     }
     const tick = () => {
-      const level = Math.min(1, getLevel() * 2.5); // speech RMS ~0-0.35 → 0-1ish
+      const level = Math.min(1, getLevel() * 2.5); // speech RMS ~0-0.35 → ~0-1
       if (ringRef.current) {
         ringRef.current.style.transform = `scale(${(1 + level * 0.08).toFixed(3)})`;
         ringRef.current.style.boxShadow = `0 0 0 ${(level * 14).toFixed(1)}px rgba(91, 140, 255, 0.25)`;
@@ -83,8 +73,7 @@ export default function AvatarOrb({ getLevel, active, frames, videoSrc, initials
     const schedule = () => {
       const gap = BLINK_MIN_GAP_MS + Math.random() * (BLINK_MAX_GAP_MS - BLINK_MIN_GAP_MS);
       blinkTimer = setTimeout(() => {
-        // Skip the blink mid-word — eyes closed with the mouth open reads
-        // as a glitch, not a blink.
+        // Skip the blink mid-word — eyes closed with the mouth open looks glitchy.
         if (blinkRef.current && !mouthOpenRef.current) {
           blinkRef.current.style.opacity = "1";
           openTimer = setTimeout(() => {

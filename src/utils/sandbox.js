@@ -1,24 +1,10 @@
 import { deepEqual } from "./deepEqual.js";
 import { runPythonTest } from "./pythonRunner.js";
 
-// ---------------------------------------------------------------------------
-// SANDBOX EXECUTION — runs candidate JavaScript entirely client-side, with no
-// backend and no code-execution service (no Judge0, no server sandbox).
-//
-// The candidate's source is spliced as *text* into a tiny worker script,
-// which is handed to the browser as a Blob URL and run inside a real Web
-// Worker: a separate thread with no access to our DOM, our state, or the
-// network beyond what the worker itself opens. A hard setTimeout guarantees
-// that a candidate's infinite loop or runaway recursion can only hang that
-// disposable worker thread, never the page — we just terminate() it.
-//
-// Splicing `code` into the template literal below is safe even if the
-// candidate's own code contains backticks or ${...}: by the time `${code}`
-// is substituted, we're just building a plain string. The backtick syntax
-// only matters while *this* file is being parsed, which happens once, before
-// any candidate code exists — the resulting workerCode string is parsed
-// fresh, from scratch, by the Worker itself.
-// ---------------------------------------------------------------------------
+// Runs candidate JavaScript client-side with no backend. The source is spliced
+// as text into a tiny worker script, run in a Web Worker with no access to our
+// DOM or state; a setTimeout terminates the worker if the code hangs, so an
+// infinite loop can only stall that disposable thread, never the page.
 function runInSandbox(code, testInput, timeoutMs = 3000) {
   return new Promise((resolve) => {
     const workerCode = `
@@ -57,11 +43,9 @@ function runInSandbox(code, testInput, timeoutMs = 3000) {
   });
 }
 
-// Runs every test case for the current problem against the candidate's
-// current editor contents and returns the `lastTestResults` array shape the
-// rest of the app expects. JavaScript gets one disposable sandboxed Worker
-// per case; Python goes through the persistent Pyodide worker (see
-// pythonRunner.js) — both resolve to the same { ok, result | error } shape.
+// Runs every test case and returns the lastTestResults array shape the app
+// expects. JS gets a disposable worker per case; Python goes through the
+// persistent Pyodide worker — both resolve to the same { ok, result | error }.
 export async function runAllTests(code, testCases, language = "javascript") {
   const results = [];
   for (const tc of testCases) {

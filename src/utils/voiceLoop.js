@@ -1,19 +1,11 @@
 import { getSharedAudioContext } from "./audio.js";
 
-// ---------------------------------------------------------------------------
-// HANDS-FREE VOICE LOOP — replaces push-to-talk. The mic stream stays open
-// for the whole interview; a lightweight local voice-activity detector (RMS
-// of the analyser's time-domain samples, polled every 50ms) decides when the
-// candidate started and stopped talking, and emits each finished utterance
-// as a Blob through `onUtterance` — from there the existing pipeline is
-// unchanged (Gemini native audio-in, Speech-to-Text fallback on 400).
-//
-// Turn-taking rules live in the caller: it calls `hold()` while a turn is
-// processing or the interviewer is speaking (so the loop never records the
-// TTS reply — echoCancellation helps, holding guarantees it) and `resume()`
-// when the floor is the candidate's again. `setMuted` is the user-facing
-// kill switch. All detection thresholds are tunable below.
-// ---------------------------------------------------------------------------
+// Hands-free voice loop. The mic stays open all session; a local voice-activity
+// detector (RMS of the analyser's samples, polled every 50ms) decides when the
+// candidate starts and stops talking and emits each utterance as a Blob through
+// `onUtterance`. Turn-taking lives in the caller: `hold()` while a turn is
+// processing or the interviewer is speaking, `resume()` when the floor is the
+// candidate's, `setMuted` as the user kill switch.
 
 const SPEECH_RMS_THRESHOLD = 0.02; // RMS of normalized [-1, 1] samples
 const SPEECH_START_MS = 150; // sustained sound before we call it speech
@@ -31,15 +23,9 @@ function pickRecorderMimeType() {
     : "";
 }
 
-// Statuses reported via onStatusChange:
-//   "listening"  — idle, watching for speech
-//   "capturing"  — candidate is talking, recorder running
-//   "held"       — paused by the caller (turn processing / TTS playing)
-//   "muted"      — paused by the user
-//
-// onSpeechStart fires the moment sustained speech is detected (capture
-// begins) — the caller uses it for barge-in: cutting the interviewer's TTS
-// short when the candidate starts talking over it.
+// Statuses via onStatusChange: "listening" (idle), "capturing" (recording),
+// "held" (paused by caller), "muted" (paused by user). onSpeechStart fires when
+// capture begins — the caller uses it for barge-in.
 export function createVoiceLoop({ onUtterance, onLevel, onStatusChange, onSpeechStart }) {
   let stream = null;
   let sourceNode = null;
@@ -58,13 +44,9 @@ export function createVoiceLoop({ onUtterance, onLevel, onStatusChange, onSpeech
   let muted = false;
   let stopped = false;
   let status = null;
-  // Capture-START threshold multiplier. Raised (via setThresholdBoost) while
-  // the interviewer's reply is playing: echo cancellation removes most of
-  // the speaker output from the mic but not all of it, and at 1x the
-  // residue could pass for speech and cut the reply short. Genuine
-  // barge-in speech close to the mic clears the boosted bar easily. Only
-  // capture START is boosted — once capturing, end-of-utterance detection
-  // stays at 1x so the tail of a real interruption isn't chopped.
+  // Capture-start threshold multiplier, raised while the reply plays so echo
+  // residue can't pass for speech. Only start is boosted — end-of-utterance
+  // detection stays at 1x so a real interruption's tail isn't chopped.
   let thresholdBoost = 1;
 
   function setStatus(next) {
@@ -78,21 +60,20 @@ export function createVoiceLoop({ onUtterance, onLevel, onStatusChange, onSpeech
     setStatus(muted ? "muted" : held ? "held" : "listening");
   }
 
-  // Throws if the user denies mic permission (or no mic exists) — caller is
-  // expected to catch this and run the session as text-only.
+  // Throws if mic permission is denied or none exists — caller runs text-only.
   async function start() {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     const ctx = getSharedAudioContext();
     if (!ctx) throw new Error("Web Audio is not available in this browser.");
-    // With an active capture stream Chrome permits resuming without a fresh
-    // gesture; without this the analyser reads silence forever.
+    // An active capture stream lets Chrome resume without a fresh gesture;
+    // without this the analyser reads silence forever.
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
     sourceNode = ctx.createMediaStreamSource(stream);
     analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
-    sourceNode.connect(analyser); // analysis only — never wired to destination
+    sourceNode.connect(analyser); // analysis only — never wired to output
     samples = new Float32Array(analyser.fftSize);
     pollTimer = setInterval(poll, POLL_MS);
     idleStatus();
@@ -142,7 +123,7 @@ export function createVoiceLoop({ onUtterance, onLevel, onStatusChange, onSpeech
     recorder.addEventListener("dataavailable", (e) => {
       if (e.data && e.data.size > 0) chunks.push(e.data);
     });
-    recorder.start(250); // timeslice so chunks flow even for long utterances
+    recorder.start(250); // timeslice so chunks flow for long utterances
     capturing = true;
     captureStartedAt = Date.now();
     aboveMs = 0;
@@ -170,7 +151,7 @@ export function createVoiceLoop({ onUtterance, onLevel, onStatusChange, onSpeech
 
   function endCapture() {
     capturing = false;
-    // The utterance proper ended SPEECH_END_MS ago — the tail is silence.
+    // The utterance ended SPEECH_END_MS ago; the tail is silence.
     const spokenMs = Date.now() - captureStartedAt - SPEECH_END_MS;
     stopRecorder().then((blob) => {
       if (blob && spokenMs >= MIN_UTTERANCE_MS && blob.size >= MIN_UTTERANCE_BYTES) {
@@ -185,7 +166,7 @@ export function createVoiceLoop({ onUtterance, onLevel, onStatusChange, onSpeech
     stopRecorder(); // discard the blob
   }
 
-  // Caller-controlled pause: while a turn is in flight or TTS is playing.
+  // Caller-controlled pause while a turn is in flight or TTS is playing.
   function hold() {
     held = true;
     if (capturing) cancelCapture();

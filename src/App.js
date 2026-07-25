@@ -8,11 +8,8 @@ import ScorecardScreen from "./components/ScorecardScreen.js";
 
 const DEFAULT_SETTINGS = { interviewerId: "maya", language: "javascript", sessionLengthMinutes: 30 };
 
-// Top-level state machine. Everything here is plain React state — per the
-// hard constraints, nothing persists across a refresh and there is no
-// database backing any of it (the only server involved is the same-origin
-// ADC-authenticated proxy in server/server.js, which holds no session state
-// of its own).
+// Top-level view state machine. Everything is in-memory React state and
+// resets on refresh.
 export default function App() {
   const [view, setView] = useState("setup"); // setup | interview | generating-scorecard | scorecard
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -21,11 +18,8 @@ export default function App() {
   const [code, setCode] = useState("");
   const [lastTestResults, setLastTestResults] = useState([]);
   const [transcript, setTranscript] = useState([]);
-  // Shared session log the three agents all write into: per-turn updates
-  // (Agent 1), periodic checkpoint updates (Agent 2), and watchdog nudges
-  // (Agent 3) each append { timestamp, source, criteriaUpdate }. Unlike the
-  // old hidden "interviewerImpressions" this replaces, it's shown live to
-  // the candidate via CriteriaMatrix.
+  // Shared log the interviewer, aggregator and watchdog all append criteria
+  // updates to; also drives the live CriteriaMatrix.
   const [criteriaLog, setCriteriaLog] = useState([]);
   const [watchdogNudgeCount, setWatchdogNudgeCount] = useState(0);
   const [scorecard, setScorecard] = useState(null);
@@ -76,8 +70,7 @@ export default function App() {
 
   function handleRestart() {
     setView("setup");
-    // Settings survive on purpose — "Practice again" shouldn't forget who
-    // you like interviewing with or which language you code in.
+    // Keep settings so "Practice again" remembers your interviewer and language.
     setCurrentProblem(null);
     setCode("");
     setLastTestResults([]);

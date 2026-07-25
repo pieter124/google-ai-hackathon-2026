@@ -6,13 +6,10 @@ import { javascript } from "https://esm.sh/@codemirror/lang-javascript@6";
 import { python } from "https://esm.sh/@codemirror/lang-python@6";
 import { oneDark } from "https://esm.sh/@codemirror/theme-one-dark@6";
 
-// CodeMirror 6 wrapped as a React component. The editor is imperative by
-// nature (it owns its own DOM), so we mount it once in a ref and forward
-// document changes up via `onChange`. The parent resets the editor to a new
-// problem's starterCode (or a new language) by remounting this component
-// with a fresh `key` (see InterviewScreen) rather than by reconfiguring
-// state in place — much simpler than reconciling CodeMirror's internal
-// state from the outside.
+// CodeMirror 6 wrapped as a React component. It owns its own DOM, so we mount
+// it once in a ref and forward changes up via `onChange`. The parent swaps
+// problems or languages by remounting with a fresh `key` rather than
+// reconfiguring the editor in place.
 export default function CodeEditor({ initialCode, language, onChange }) {
   const containerRef = useRef(null);
   const viewRef = useRef(null);

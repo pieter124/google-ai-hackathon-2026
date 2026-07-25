@@ -13,7 +13,7 @@ function initialsOf(name) {
     .toUpperCase();
 }
 
-// Simple segmented control shared by the language and session-length dials.
+// Segmented control shared by the language and session-length dials.
 function Segmented({ options, value, onChange, ariaLabel }) {
   return h(
     "div",
@@ -33,12 +33,11 @@ function Segmented({ options, value, onChange, ariaLabel }) {
   );
 }
 
-// The problem is picked by the weighted randomizer (~10% easy / ~45% medium /
-// ~45% hard) once the candidate hits Start — the dials here are who
-// interviews you, which language you code in, and how long you get.
+// The problem is picked for the candidate at Start; the dials here choose the
+// interviewer, language, and session length.
 export default function SetupScreen({ settings, onChangeSettings, onStart }) {
-  // id -> data URI once generated; id -> "error" locks in the initials
-  // fallback. Absent while the shimmer placeholder shows.
+  // id -> data URI once generated; id -> "error" for the initials fallback.
+  // Absent while the shimmer placeholder shows.
   const [avatars, setAvatars] = useState({});
 
   useEffect(() => {
@@ -53,14 +52,9 @@ export default function SetupScreen({ settings, onChangeSettings, onStart }) {
         })
     );
 
-    // Demo warm-up: once the visible portraits are in, quietly pre-generate
-    // every character's animation frames (mouth-open + blink), one at a
-    // time so we never hammer the image model. Everything lands in the
-    // localStorage cache, so an interview started later — with ANY
-    // character — has its talking animation ready instantly. Deliberately
-    // not cancelled on unmount: the whole point is to finish in the
-    // background. Cache hits make this a no-op on every visit after the
-    // first.
+    // Once the visible portraits are in, pre-generate every character's
+    // animation frames one at a time so any interview started later has its
+    // talking animation cached and ready. Not cancelled on unmount by design.
     Promise.allSettled(basePromises).then(async () => {
       for (const interviewer of INTERVIEWERS) {
         await getAvatarVariant(interviewer, "talking").catch(() => {});
@@ -73,10 +67,8 @@ export default function SetupScreen({ settings, onChangeSettings, onStart }) {
     };
   }, []);
 
-  // Same idea for Python: picking it on this screen starts the ~10MB
-  // Pyodide download immediately, so the runtime is warm before the editor
-  // even appears. (The worker is a module-level singleton — it survives
-  // the switch to the interview screen.)
+  // Picking Python here starts the ~10MB Pyodide download early, so the runtime
+  // is warm before the editor appears. The worker singleton survives the switch.
   useEffect(() => {
     if (settings.language === "python") preloadPython();
   }, [settings.language]);
@@ -159,9 +151,8 @@ export default function SetupScreen({ settings, onChangeSettings, onStart }) {
         "button",
         {
           className: "btn btn-primary btn-start",
-          // unlockAudioContext must run synchronously inside this click so
-          // the browser credits the whole session's audio graph (greeting
-          // TTS included) as gesture-driven — see utils/audio.js.
+          // Must run synchronously in the click so the browser credits the
+          // session's audio (greeting TTS included) as gesture-driven.
           onClick: () => {
             unlockAudioContext();
             onStart();

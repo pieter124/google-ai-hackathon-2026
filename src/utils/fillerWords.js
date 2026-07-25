@@ -1,8 +1,6 @@
-// Local, free filler-word detector — no API call. Backs both the Watchdog's
-// "talking but not getting anywhere" trigger and the final report's filler
-// stats. Deliberately simple regex counting, not NLP: matches the spec's
-// "local regex, free" line and the honest caveat that this is a coaching
-// signal, not a rigorous fluency measurement.
+// Local filler-word detector — no API call. Backs the watchdog's "talking but
+// not progressing" trigger and the report's filler stats. Plain regex counting,
+// a coaching signal rather than a rigorous fluency measure.
 const FILLER_PATTERNS = [
   /\bum+\b/gi,
   /\buh+\b/gi,
@@ -16,7 +14,7 @@ const FILLER_PATTERNS = [
   /\bi mean\b/gi,
 ];
 
-// { fillerCount, totalWords, ratio } for one piece of candidate speech.
+// { fillerCount, totalWords, ratio } for one piece of speech.
 export function computeFillerStats(text) {
   const totalWords = (text.match(/\S+/g) || []).length;
   const fillerCount = FILLER_PATTERNS.reduce((count, pattern) => count + (text.match(pattern) || []).length, 0);
@@ -24,8 +22,8 @@ export function computeFillerStats(text) {
   return { fillerCount, totalWords, ratio };
 }
 
-// Aggregates filler stats across several candidate turns (e.g. the whole
-// session for the final report, or the last few turns for the Watchdog).
+// Aggregates filler stats across several turns (the whole session, or the last
+// few for the watchdog).
 export function aggregateFillerStats(texts) {
   const totals = texts.reduce(
     (acc, text) => {

@@ -3,8 +3,7 @@ import { CRITERIA_DEFINITIONS } from "../config.js";
 
 const DOTS = [1, 2, 3, 4, 5];
 
-// 1-5 score as a row of dots — shared between the live matrix here and the
-// final scorecard so both read the same way.
+// 1-5 score as a row of dots, shared with the final scorecard.
 export function ScoreDots({ score }) {
   return h(
     "div",
@@ -13,11 +12,8 @@ export function ScoreDots({ score }) {
   );
 }
 
-// Visible, live-updating scorecard preview — deliberately shown to the
-// candidate throughout the interview (per the spec), not hidden like the
-// old private "interviewerImpressions" concept it replaces. Fed by
-// `liveCriteria`, the merged latest-value-per-criterion view of the shared
-// criteriaLog (Agent 1's per-turn updates + Agent 2's checkpoint updates).
+// Live scorecard preview shown to the candidate throughout the interview. Fed
+// by `liveCriteria`, the merged latest-value-per-criterion view of criteriaLog.
 export default function CriteriaMatrix({ liveCriteria }) {
   return h(
     "div",

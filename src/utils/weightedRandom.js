@@ -1,5 +1,5 @@
-// Plain JS cumulative-weight picker — no API needed. Each item must expose a
-// numeric `.weight`; higher weight = proportionally more likely to be picked.
+// Cumulative-weight picker. Each item needs a numeric `.weight`; higher weight
+// is proportionally more likely.
 export function pickWeighted(items) {
   const totalWeight = items.reduce((sum, item) => sum + item.weight, 0);
   let roll = Math.random() * totalWeight;

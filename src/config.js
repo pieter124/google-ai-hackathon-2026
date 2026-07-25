@@ -1,33 +1,13 @@
 import { pickWeighted } from "./utils/weightedRandom.js";
 
-// ---------------------------------------------------------------------------
-// Every Google call (Gemini reasoning, Gemini avatar image generation, and
-// the Speech-to-Text fallback used only when Gemini's audio-understanding
-// input rejects the browser's recording format) goes through this app's own
-// backend (server/server.js) instead of straight to Google. The server
-// authenticates upstream via an API key or Application Default Credentials,
-// so no credential lives in client-side source — the model names below are
-// just passed through to tell the backend which model to call.
-// ---------------------------------------------------------------------------
-
-// Model used for reasoning calls (interview turns, checkpoints, scorecard).
+// Model names are just passed through to the backend proxy (server/server.js),
+// which handles auth — no credentials live here.
 export const GEMINI_MODEL = "gemini-3.6-flash";
-
-// Model used once per interviewer character to generate their avatar
-// portrait (cached in localStorage after the first successful generation).
 export const GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image";
 
-// ---------------------------------------------------------------------------
-// Interviewer characters — each one is a persona (fed to Gemini as the
-// interviewer instruction) plus the presentation the candidate sees: a name,
-// a title, a Cloud TTS voice, and a prompt used to generate their avatar
-// portrait. All portraits share the same art direction so the setup grid
-// looks like one cast. Voices are Chirp3-HD — Cloud TTS's most natural,
-// conversational tier (confirmed available on this project via voices:list;
-// same ~0.8s synthesize latency as Neural2 through our proxy). Each name
-// maps to a distinct persona-matched timbre: Aoede warm/breezy, Orus firm,
-// Kore firm/direct, Charon calm/deep.
-// ---------------------------------------------------------------------------
+// Interviewer personas. `description` is the instruction fed to Gemini; the
+// rest (name, title, voice, avatar prompt) is what the candidate sees. All
+// portraits share one art direction so the setup grid looks like a single cast.
 const AVATAR_STYLE =
   "Flat vector illustration, minimal modern style, clean geometric shapes, centered head-and-shoulders portrait, " +
   "solid dark navy background, soft studio lighting, no text, no watermark.";
@@ -83,10 +63,7 @@ export function getInterviewer(id) {
   return INTERVIEWERS.find((p) => p.id === id) || INTERVIEWERS[0];
 }
 
-// ---------------------------------------------------------------------------
-// Editor languages. Both are runnable: JavaScript in the existing Web Worker
-// sandbox, Python via a Pyodide worker (see utils/pythonRunner.js).
-// ---------------------------------------------------------------------------
+// JavaScript runs in a Web Worker sandbox, Python via Pyodide (utils/pythonRunner.js).
 export const LANGUAGE_OPTIONS = [
   { id: "javascript", label: "JavaScript" },
   { id: "python", label: "Python" },
@@ -97,11 +74,7 @@ export const SESSION_LENGTH_OPTIONS = [
   { id: 45, label: "45 min" },
 ];
 
-// ---------------------------------------------------------------------------
-// Live criteria matrix — the single schema shared by: the visible on-screen
-// panel, every Gemini prompt that can update criteria (per-turn, checkpoint,
-// watchdog nudge), and the final report's per-criterion scores.
-// ---------------------------------------------------------------------------
+// Criteria schema shared by the live panel, every Gemini prompt, and the report.
 export const CRITERIA_DEFINITIONS = [
   { id: "problemUnderstanding", label: "Problem Understanding" },
   { id: "communication", label: "Communication & Approach" },
@@ -109,11 +82,8 @@ export const CRITERIA_DEFINITIONS = [
   { id: "complexityAwareness", label: "Complexity Awareness" },
 ];
 
-// ---------------------------------------------------------------------------
-// Weighted randomizer for problem selection: ~10% easy / ~45% medium / ~45%
-// hard. The two curated "google-hard" problems keep their own badge/label for
-// display, but fold into the "hard" weight's candidate pool.
-// ---------------------------------------------------------------------------
+// Problem selection weights. "google-hard" problems keep their own badge but
+// fold into the "hard" pool.
 export const DIFFICULTY_WEIGHTS = [
   { difficulty: "easy", weight: 10 },
   { difficulty: "medium", weight: 45 },
@@ -125,13 +95,11 @@ function poolForDifficulty(tier) {
   return PROBLEM_BANK.filter((p) => p.difficulty === tier);
 }
 
-// DEMO OVERRIDE: hardcode every session to one problem. Set to null to
-// restore the weighted randomizer.
+// Set to a problem id to pin every session to one problem (handy for demos);
+// null uses the weighted randomizer.
 export const FORCED_PROBLEM_ID = "two-sum";
 
-// Picks a difficulty tier by weight, then a random problem from that tier's
-// pool. Exported separately from the pure `pickWeighted` utility so callers
-// don't need to know about the google-hard folding rule above.
+// Pick a difficulty tier by weight, then a random problem from that tier.
 export function pickWeightedProblem() {
   if (FORCED_PROBLEM_ID) {
     const forced = PROBLEM_BANK.find((p) => p.id === FORCED_PROBLEM_ID);
@@ -142,13 +110,8 @@ export function pickWeightedProblem() {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// ---------------------------------------------------------------------------
-// Curated problem bank — hardcoded on purpose (no AI-generated problems).
-// Every problem exposes a single `solve` entry point in each language so the
-// sandbox runners and test-case format stay identical across difficulties.
-// `examples` and `constraints` are rendered LeetCode-style in the problem
-// panel and included in the interviewer's prompt context.
-// ---------------------------------------------------------------------------
+// Curated problem bank. Every problem exposes a single `solve` entry point per
+// language so the sandbox runners and test-case format stay identical.
 export const PROBLEM_BANK = [
   {
     id: "two-sum",
