@@ -134,6 +134,13 @@ export default function ScorecardScreen({
         )
       ),
 
+      h(
+        "p",
+        { className: "fairness-note" },
+        "Filler rate is a coaching signal, not a grade. It partly reflects nerves and speaking style — " +
+          "no score above was gated on it."
+      ),
+
       h("button", { className: "btn btn-primary", onClick: onRestart }, "Practice again")
     )
   );
