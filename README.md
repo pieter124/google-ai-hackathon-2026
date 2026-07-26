@@ -135,6 +135,37 @@ Out of the box the app pins every session to one problem (Two Sum) so it's predi
 show off. To use the full weighted question bank instead, set `FORCED_PROBLEM_ID = null` in
 [`src/config.js`](src/config.js).
 
+## How a session runs
+
+A real interview isn't one undifferentiated block, so neither is this one. The session walks
+three phases and the top bar shows which one you're in:
+
+1. **Read the problem** — three minutes, counted down in the top bar. Ask all the clarifying
+   questions you want; the interviewer will answer them but won't discuss solutions yet.
+2. **Explain your approach** — out loud, before you write anything. They'll probe the plan:
+   complexity, edge cases, why this over the alternative.
+3. **Implement** — they go mostly quiet and react to what you write and run.
+
+The interviewer announces each transition in their own words rather than reading a script, so
+Maya and Erik hand you over to the keyboard quite differently.
+
+While the interviewer is talking you can **pause** them mid-sentence, **skip** the rest of the
+line, or **replay** the last thing they said — the replay is the original audio, not a
+paraphrase. Your own mic and their voice have separate on/off switches.
+
+The Watchdog is watching three patterns, not one: going quiet, talking a lot without getting
+anywhere, and wheel-spinning — rewriting the same few lines and ending up back where you
+started. That last one is the case a plain idle timer can never see, because the keystrokes
+keep it looking busy.
+
+At the end the scorecard merges everything: criteria scored against explicit 1/3/5 anchors, a
+chart of your trajectory through the session next to the written path narrative, local
+filler-word stats, correctness and complexity, and a hire/no-hire verdict.
+
+The rubric anchors, the interviewer's hint ladder and the Watchdog's thresholds aren't guesses.
+[`RESEARCH.md`](./RESEARCH.md) has the sources, and is upfront about which numbers are
+transferred by analogy from adjacent fields rather than measured on technical interviews.
+
 ## Troubleshooting
 
 - **"No Application Default Credentials found"** — re-run the `setup_adc.sh` command above,
