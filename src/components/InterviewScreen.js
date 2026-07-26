@@ -292,7 +292,7 @@ export default function InterviewScreen({
       try {
         const blob = await recorderRef.current.stop();
         const base64 = await blobToBase64(blob);
-        candidateText = await speechToText(base64);
+        candidateText = await speechToText(base64, blob.type);
       } catch (err) {
         setMicState("idle");
         setErrorBanner({ message: `Couldn't transcribe that: ${err.message}`, retry: () => setErrorBanner(null) });

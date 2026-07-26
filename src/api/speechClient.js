@@ -13,20 +13,36 @@ async function fetchWithTimeout(url, options, timeoutMs = 15000) {
   }
 }
 
+// Maps a MediaRecorder MIME type to a Cloud STT `encoding`. MediaRecorder
+// picks the container per browser (Chrome/Edge/Firefox → webm/opus; older
+// Firefox → ogg/opus), so hardcoding WEBM_OPUS would misdecode anything else.
+// Safari records mp4/aac, which the sync recognize endpoint can't ingest — we
+// throw a clear message so the caller can steer the user to the text fallback
+// rather than failing cryptically.
+function encodingForMime(mimeType) {
+  const m = (mimeType || "").toLowerCase();
+  if (m.includes("webm")) return "WEBM_OPUS";
+  if (m.includes("ogg")) return "OGG_OPUS";
+  if (m.includes("mp4") || m.includes("aac") || m.includes("m4a")) {
+    throw new Error("This browser records audio in a format Speech-to-Text can't read — use the text input instead.");
+  }
+  return "WEBM_OPUS"; // best default for the supported browsers
+}
+
 // ---------------------------------------------------------------------------
 // GOOGLE API CALL SITE 2 of 3 — Cloud Speech-to-Text (speech.googleapis.com)
 //
-// Takes the base64-encoded recording captured by MediaRecorder (WebM/Opus in
-// Chrome/Edge/Firefox) and returns the recognized transcript text. Called
-// once per push-to-talk turn, right after the candidate stops recording.
+// Takes the base64 recording captured by MediaRecorder plus its MIME type and
+// returns the recognized transcript. Called once per push-to-talk turn, right
+// after the candidate stops recording.
 // ---------------------------------------------------------------------------
-export async function speechToText(base64Audio) {
+export async function speechToText(base64Audio, mimeType) {
   const res = await fetchWithTimeout(`https://speech.googleapis.com/v1/speech:recognize?key=${getApiKey()}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       config: {
-        encoding: "WEBM_OPUS",
+        encoding: encodingForMime(mimeType),
         languageCode: "en-US",
         model: "default",
       },

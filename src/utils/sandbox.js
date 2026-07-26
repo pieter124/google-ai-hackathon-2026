@@ -32,12 +32,18 @@ function runInSandbox(code, testInput, timeoutMs = 3000) {
       };
     `;
     let worker;
+    let objectUrl;
     try {
-      worker = new Worker(URL.createObjectURL(new Blob([workerCode], { type: "application/javascript" })));
+      objectUrl = URL.createObjectURL(new Blob([workerCode], { type: "application/javascript" }));
+      worker = new Worker(objectUrl);
     } catch (err) {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
       resolve({ ok: false, error: `Could not start sandbox: ${err.message}` });
       return;
     }
+    // The worker keeps its own copy of the script once constructed, so the blob
+    // URL can be released immediately — otherwise one leaks per test case.
+    URL.revokeObjectURL(objectUrl);
     const timer = setTimeout(() => {
       worker.terminate();
       resolve({ ok: false, error: "Timed out (possible infinite loop)" });

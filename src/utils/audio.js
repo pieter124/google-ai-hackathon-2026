@@ -34,10 +34,17 @@ export function playBase64Audio(base64Mp3, onAmplitude = () => {}) {
 
     let rafId = null;
     let done = false;
+    let nodes = null; // { source, analyser } — disconnected on finish
     function finish(played) {
       if (done) return;
       done = true;
       if (rafId) cancelAnimationFrame(rafId);
+      // Disconnect this turn's graph. Each turn builds a fresh
+      // source→analyser→destination chain on the one shared context; without
+      // this they'd accumulate over a 30-45 min session.
+      if (nodes) {
+        try { nodes.source.disconnect(); nodes.analyser.disconnect(); } catch { /* already gone */ }
+      }
       onAmplitude(0);
       resolve({ played });
     }
@@ -53,6 +60,7 @@ export function playBase64Audio(base64Mp3, onAmplitude = () => {}) {
         analyser.fftSize = 256;
         source.connect(analyser);
         analyser.connect(ctx.destination);
+        nodes = { source, analyser };
         const bins = new Uint8Array(analyser.frequencyBinCount);
         const tick = () => {
           analyser.getByteFrequencyData(bins);

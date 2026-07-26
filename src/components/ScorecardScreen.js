@@ -40,7 +40,7 @@ export default function ScorecardScreen({ scorecard, lastTestResults, onRestart 
         { className: "scorecard-head" },
         h("h1", null, "Coaching Scorecard"),
         hireDecision &&
-          h("span", { className: `hire-badge hire-${hireDecision.replace(/\s+/g, "-")}` }, hireDecision)
+          h("span", { className: `hire-badge hire-${hireDecision.toLowerCase().replace(/\s+/g, "-")}` }, hireDecision)
       ),
 
       // --- Rubric scores ---
