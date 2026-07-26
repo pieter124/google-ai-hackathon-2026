@@ -34,6 +34,9 @@ export default function InterviewScreen({
 }) {
   const [micState, setMicState] = useState("idle"); // idle | listening | processing | speaking
   const [micAvailable, setMicAvailable] = useState(true);
+  const [micMuted, setMicMuted] = useState(false); // user mutes their own input
+  const [agentPaused, setAgentPaused] = useState(false); // interviewer speech paused
+  const [hasSpoken, setHasSpoken] = useState(false); // enables "replay last line" once there is one
   const [textInputValue, setTextInputValue] = useState("");
   const [runningTests, setRunningTests] = useState(false);
   const [errorBanner, setErrorBanner] = useState(null); // { message, retry }
@@ -79,6 +82,12 @@ export default function InterviewScreen({
 
   const recorderRef = useRef(null);
   if (!recorderRef.current) recorderRef.current = createVoiceRecorder();
+
+  // Playback control for the interviewer's voice: the controller for the line
+  // currently playing (pause/resume), and the base64 of the last line spoken
+  // (so "replay" re-speaks just that utterance, not the whole transcript).
+  const currentPlaybackRef = useRef(null);
+  const lastAudioB64Ref = useRef(null);
 
   // Shared session log + amplitude channel for the avatar. Created once.
   const startRef = useRef(Date.now());
@@ -159,12 +168,19 @@ export default function InterviewScreen({
     // Speak the reply — soft-fail: the text is already the caption, so a TTS
     // hiccup or blocked autoplay must never strand the UI.
     setMicState("speaking");
+    setAgentPaused(false);
     try {
       const audioB64 = await textToSpeech(turn.response, interviewer.voiceName);
-      await playBase64Audio(audioB64, (v) => { amplitudeRef.current = v; });
+      lastAudioB64Ref.current = audioB64; // enables "replay last line"
+      setHasSpoken(true);
+      const playback = playBase64Audio(audioB64, (v) => { amplitudeRef.current = v; });
+      currentPlaybackRef.current = playback;
+      await playback.finished;
+      currentPlaybackRef.current = null;
     } catch (err) {
       console.warn("Text-to-Speech unavailable:", err.message);
     }
+    setAgentPaused(false);
     setMicState("idle");
     return turn;
   }
@@ -177,6 +193,40 @@ export default function InterviewScreen({
   function markActivity({ typed = false } = {}) {
     lastActivityRef.current = Date.now();
     if (typed) lastCodeChangeRef.current = Date.now();
+  }
+
+  // --- Voice controls --------------------------------------------------
+  // Mute the candidate's own input. If muted mid-recording, drop the take.
+  function toggleMute() {
+    setMicMuted((m) => {
+      const next = !m;
+      if (next && micState === "listening") {
+        recorderRef.current.stop().catch(() => {});
+        setMicState("idle");
+      }
+      return next;
+    });
+  }
+
+  // Pause/resume the interviewer's current line, from exactly where it was.
+  function toggleAgentPause() {
+    const pb = currentPlaybackRef.current;
+    if (!pb) return;
+    if (pb.isPaused()) { pb.resume(); setAgentPaused(false); }
+    else { pb.pause(); setAgentPaused(true); }
+  }
+
+  // Replay ONLY the last thing the interviewer said (not the whole session).
+  // Enabled once idle so it can't overlap a live turn's playback.
+  async function replayLast() {
+    if (!lastAudioB64Ref.current || micState !== "idle") return;
+    setMicState("speaking");
+    setAgentPaused(false);
+    const playback = playBase64Audio(lastAudioB64Ref.current, (v) => { amplitudeRef.current = v; });
+    currentPlaybackRef.current = playback;
+    await playback.finished;
+    currentPlaybackRef.current = null;
+    setMicState("idle");
   }
 
   // -----------------------------------------------------------------------
@@ -297,7 +347,7 @@ export default function InterviewScreen({
   // TRIGGER 1 — voice (push to talk)
   // -----------------------------------------------------------------------
   async function handleMicClick() {
-    if (errorBanner || runningTests) return;
+    if (errorBanner || runningTests || micMuted) return;
 
     if (micState === "idle") {
       try {
@@ -456,15 +506,36 @@ export default function InterviewScreen({
     h(
       "div",
       { className: "voice-bar" },
+
+      // Voice control row: mute your own mic; pause/resume the interviewer
+      // while it speaks, or replay just its last line once it's done.
+      h(
+        "div",
+        { className: "voice-controls" },
+        micAvailable &&
+          h(
+            "button",
+            { className: `btn btn-small ${micMuted ? "toggle-on" : ""}`, onClick: toggleMute, "aria-pressed": micMuted },
+            micMuted ? "🔇 Unmute mic" : "🎙 Mute mic"
+          ),
+        micState === "speaking"
+          ? h("button", { className: "btn btn-small", onClick: toggleAgentPause }, agentPaused ? "▶ Resume" : "⏸ Pause")
+          : h(
+              "button",
+              { className: "btn btn-small", onClick: replayLast, disabled: !hasSpoken || micState !== "idle" || !!errorBanner },
+              "↺ Replay last"
+            )
+      ),
+
       micAvailable
         ? h(
             "button",
             {
               className: `mic-btn mic-${micState}`,
               onClick: handleMicClick,
-              disabled: micState === "processing" || micState === "speaking" || !!errorBanner || runningTests,
+              disabled: micMuted || micState === "processing" || micState === "speaking" || !!errorBanner || runningTests,
             },
-            micLabel
+            micMuted ? "🔇 Muted" : micLabel
           )
         : h(
             "form",
