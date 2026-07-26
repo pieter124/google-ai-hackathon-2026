@@ -137,34 +137,33 @@ show off. To use the full weighted question bank instead, set `FORCED_PROBLEM_ID
 
 ## How a session runs
 
-A real interview isn't one undifferentiated block, so neither is this one. The session walks
-three phases and the top bar shows which one you're in:
+A real interview isn't one long block, so this one isn't either. It runs in three phases and
+the top bar tells you which one you're in.
 
-1. **Read the problem** — three minutes, counted down in the top bar. Ask all the clarifying
-   questions you want; the interviewer will answer them but won't discuss solutions yet.
-2. **Explain your approach** — out loud, before you write anything. They'll probe the plan:
-   complexity, edge cases, why this over the alternative.
-3. **Implement** — they go mostly quiet and react to what you write and run.
+1. **Read the problem.** Three minutes, counted down in the top bar. Ask as many clarifying
+   questions as you like. The interviewer will answer them but won't talk about solutions yet.
+2. **Explain your approach.** Out loud, before you write anything. They'll dig into the plan:
+   complexity, edge cases, why this way and not the other one.
+3. **Implement.** They go quiet and react to what you write and run.
 
-The interviewer announces each transition in their own words rather than reading a script, so
-Maya and Erik hand you over to the keyboard quite differently.
+Each handover is phrased by the interviewer rather than read off a script, so Maya and Erik
+move you along quite differently.
 
-While the interviewer is talking you can **pause** them mid-sentence, **skip** the rest of the
-line, or **replay** the last thing they said — the replay is the original audio, not a
-paraphrase. Your own mic and their voice have separate on/off switches.
+While the interviewer is talking you can pause them mid-sentence, skip the rest of the line,
+or replay the last thing they said. The replay is the original audio, not a paraphrase. Your
+mic and their voice have separate switches.
 
-The Watchdog is watching three patterns, not one: going quiet, talking a lot without getting
-anywhere, and wheel-spinning — rewriting the same few lines and ending up back where you
-started. That last one is the case a plain idle timer can never see, because the keystrokes
-keep it looking busy.
+The Watchdog is looking for three things: going quiet, talking a lot without getting anywhere,
+and rewriting the same few lines until you're back where you started. That last one is the
+case a plain idle timer never catches, because all those keystrokes make you look busy.
 
-At the end the scorecard merges everything: criteria scored against explicit 1/3/5 anchors, a
-chart of your trajectory through the session next to the written path narrative, local
-filler-word stats, correctness and complexity, and a hire/no-hire verdict.
+The scorecard at the end pulls it together. Scores against fixed 1/3/5 anchors, a chart of how
+the session went next to the written version, filler-word stats, correctness, complexity, and
+a verdict.
 
-The rubric anchors, the interviewer's hint ladder and the Watchdog's thresholds aren't guesses.
-[`RESEARCH.md`](./RESEARCH.md) has the sources, and is upfront about which numbers are
-transferred by analogy from adjacent fields rather than measured on technical interviews.
+The anchors, the way the interviewer hands out hints, and the Watchdog's thresholds aren't
+made up. [`RESEARCH.md`](./RESEARCH.md) has the sources, and it says plainly which numbers are
+borrowed from nearby fields rather than measured on real technical interviews.
 
 ## Troubleshooting
 
@@ -183,7 +182,7 @@ transferred by analogy from adjacent fields rather than measured on technical in
 | --- | --- | --- |
 | **Aayan** | Frontend | UI and the initial prototype |
 | **Pieter** | Product Manager | Led the app design and UX decisions, and early project planning |
-| **Sali** | Concept & AI Agent Design | Original concept for the product.<br>Designed how the three agents *behave*, not just how they're called: the anchored 1/3/5 scoring rubric and communication-as-a-cap rule, the interviewer's hint-ladder pedagogy and per-persona hint posture, and the three-phase session flow (read → explain approach → implement).<br>Built the Watchdog's wheel-spinning detection — the stuck pattern a plain idle timer can't see — plus the −1..+1 trajectory signal and the scorecard's path chart it draws.<br>Voice controls (pause / replay), and the fairness framing on the filler-word stats.<br>Grounded the rubric anchors and Watchdog thresholds in the literature — see [`RESEARCH.md`](./RESEARCH.md). |
+| **Sali** | Concept & AI Agent Design | Came up with the idea for the product.<br>Worked on how the three agents behave rather than just how they're called: the 1/3/5 scoring rubric and its anchors, treating communication as a cap, when and how far the interviewer steps in to help, and the three phases a session runs through (read, explain the approach, implement).<br>Built the Watchdog check that spots someone rewriting the same lines and getting nowhere, which a plain idle timer never catches, plus the trajectory signal behind the scorecard's path chart.<br>Pause and replay for the interviewer's voice, and the note on the scorecard that filler rate is coaching, not a grade.<br>Backed the rubric anchors and Watchdog thresholds with sources, see [`RESEARCH.md`](./RESEARCH.md). |
 | **Vedika** | Frontend | UI and the initial prototype |
 | **Yurii** | Backend | AI integration and text-to-speech |
 
