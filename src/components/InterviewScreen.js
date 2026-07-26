@@ -19,6 +19,13 @@ const WATCHDOG_CHECKIN_SILENCE_MS = 90000;
 const WATCHDOG_FILLER_RATIO_THRESHOLD = 0.18;
 const WATCHDOG_FILLER_LOOKBACK_TURNS = 3;
 const AGGREGATOR_INTERVAL_MS = 4 * 60 * 1000;
+// Thrash detection — the third stuck signal, for someone whose hands are busy
+// but who isn't getting anywhere. Tuned against the 5s snapshot cadence above.
+const THRASH_WINDOW_MS = 30000;
+const THRASH_MIN_SNAPSHOTS = 4;
+const THRASH_ACTIVE_EDIT_MS = 8000; // last keystroke this recent = still editing
+const THRASH_MAX_NET_CHARS = 8; // net change across the window that still counts as standing still
+const THRASH_MIN_CODE_CHARS = 40; // below this they're barely started, not stuck
 const COUNTDOWN_WARN_SECONDS = 5 * 60;
 const COUNTDOWN_DANGER_SECONDS = 60;
 // Barge-in must sustain this long before we cut the TTS, to absorb echo blips.
@@ -154,6 +161,7 @@ export default function InterviewScreen({
   const lastCodeChangeAtRef = useRef(Date.now());
   const lastTurnSentAtRef = useRef(Date.now());
   const watchdogNudgeInFlightRef = useRef(false);
+  const codeHistoryRef = useRef([]); // rolling { at, code } snapshots for thrash detection
 
   // Phase bookkeeping. `lastCandidateActivityAtRef` deliberately tracks only
   // things the CANDIDATE did — unlike lastTurnSentAtRef, which also moves when
@@ -493,9 +501,15 @@ export default function InterviewScreen({
   // "they've gone quiet", so it belongs on the same timer.
   useEffect(() => {
     const interval = setInterval(() => {
+      const now = Date.now();
+
+      // Snapshot first, unconditionally — thrash detection needs an unbroken
+      // record of the code, including across ticks the guards below skip.
+      codeHistoryRef.current.push({ at: now, code: codeRef.current });
+      codeHistoryRef.current = codeHistoryRef.current.filter((snap) => snap.at >= now - THRASH_WINDOW_MS);
+
       if (turnStateRef.current !== "idle" || errorBannerRef.current || watchdogNudgeInFlightRef.current) return;
 
-      const now = Date.now();
       // Reading time is theirs — silence here is the candidate doing exactly
       // what they were asked to do, so no check-in fires at all.
       if (phaseRef.current === "reading") return;
@@ -532,14 +546,21 @@ export default function InterviewScreen({
         fillerRatio > WATCHDOG_FILLER_RATIO_THRESHOLD &&
         !typingRecently;
 
+      // Typing hard and getting nowhere reads as "coding silently" to the
+      // check-in above, which would ask them to narrate. Detecting the churn
+      // lets the interviewer offer a hint instead, which is what they need.
+      const thrashing = typingRecently && detectThrash(now);
+
       watchdogNudgeInFlightRef.current = true;
       lastTurnSentAtRef.current = now; // next check-in is another full silence window away
       setWatchdogNudgeCount((n) => n + 1);
-      const reason = fillerWithoutProgress
-        ? "watchdog: high filler-word ratio with little new code across recent turns — candidate may be talking without making progress"
-        : typingRecently
-          ? "watchdog check-in: the candidate has been coding silently for a while — in ONE short sentence, politely ask them to talk through what they're doing; do NOT give hints or comment on the code's direction"
-          : "watchdog check-in: the candidate has been silent and inactive for a while — check in briefly and ask how it's going; offer the smallest possible hint only if they were already stuck at the last check-in too";
+      const reason = thrashing
+        ? "watchdog: the candidate keeps rewriting the same few lines and ending up back where they started — they look stuck mid-implementation, so offer the smallest hint that unblocks them rather than asking them to narrate"
+        : fillerWithoutProgress
+          ? "watchdog: high filler-word ratio with little new code across recent turns — candidate may be talking without making progress"
+          : typingRecently
+            ? "watchdog check-in: the candidate has been coding silently for a while — in ONE short sentence, politely ask them to talk through what they're doing; do NOT give hints or comment on the code's direction"
+            : "watchdog check-in: the candidate has been silent and inactive for a while — check in briefly and ask how it's going; offer the smallest possible hint only if they were already stuck at the last check-in too";
       sendTurn({ latestEvent: reason, candidateEntryText: null, audio: null }, { soft: true }).finally(() => {
         watchdogNudgeInFlightRef.current = false;
       });
@@ -547,6 +568,25 @@ export default function InterviewScreen({
     return () => clearInterval(interval);
     // eslint-disable-next-line
   }, []);
+
+  // Wheel-spinning: they're clearly still typing, but over the last half-minute
+  // the code hasn't grown and has come back to a state it already passed
+  // through — delete a line, retype it, delete it again. It's a different
+  // failure from going quiet, and the activity checks above can't see it
+  // because the keystrokes keep the typing timer permanently fresh.
+  // See RESEARCH.md.
+  function detectThrash(now) {
+    const history = codeHistoryRef.current;
+    if (history.length < THRASH_MIN_SNAPSHOTS) return false;
+    if (now - lastCodeChangeAtRef.current > THRASH_ACTIVE_EDIT_MS) return false; // not actually editing
+
+    const latest = history[history.length - 1].code;
+    if (latest.trim().length < THRASH_MIN_CODE_CHARS) return false; // an empty editor isn't thrashing
+    const netGrowth = Math.abs(latest.length - history[0].code.length);
+    if (netGrowth > THRASH_MAX_NET_CHARS) return false; // real forward progress
+
+    return history.slice(0, -1).some((snap) => snap.code === latest);
+  }
 
   // Aggregator: fires on its own timer and analyzes the whole window since the
   // last checkpoint. Consecutive dead windows (no transcript, no code change)
