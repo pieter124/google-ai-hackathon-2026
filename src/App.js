@@ -1,89 +1,103 @@
 import { useState, h } from "./reactRuntime.js";
-import { PROBLEM_BANK } from "./config.js";
-import { callGeminiScorecard } from "./api/geminiClient.js";
+import { pickWeightedProblem } from "./utils/weightedRandom.js";
+import { callGeminiReport } from "./api/geminiClient.js";
 import SetupScreen from "./components/SetupScreen.js";
 import InterviewScreen from "./components/InterviewScreen.js";
 import ScorecardScreen from "./components/ScorecardScreen.js";
 
-const DEFAULT_SETTINGS = { difficulty: "easy", persona: "auto" };
+// Interviewer difficulty (easy/hard persona), not problem difficulty — the
+// problem is rolled by the weighted randomizer. Session length in minutes.
+const DEFAULT_SETTINGS = { difficulty: "easy", sessionLength: 30 };
 
-// Top-level state machine. Everything here is plain React state — per the
-// hard constraints, nothing persists across a refresh and there is no
-// backend/database backing any of it.
+// Top-level state machine. Everything is plain React state — per the hard
+// constraints nothing persists across a refresh and there is no backend.
 export default function App() {
-  const [view, setView] = useState("setup"); // setup | interview | generating-scorecard | scorecard
+  const [view, setView] = useState("setup"); // setup | interview | generating-report | scorecard
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
 
-  const [currentProblem, setCurrentProblem] = useState(null);
+  // Problem is chosen on the setup screen (via the Randomize button) so the
+  // candidate sees what they're about to get and can reroll before starting.
+  const [problem, setProblem] = useState(() => pickWeightedProblem());
+
   const [code, setCode] = useState("");
   const [lastTestResults, setLastTestResults] = useState([]);
   const [transcript, setTranscript] = useState([]);
   const [interviewerImpressions, setInterviewerImpressions] = useState(""); // never shown to the candidate
   const [hintsUsed, setHintsUsed] = useState(0);
   const [scorecard, setScorecard] = useState(null);
-  const [scorecardError, setScorecardError] = useState(null);
+  const [reportError, setReportError] = useState(null);
 
   function handleChangeSettings(partial) {
     setSettings((prev) => ({ ...prev, ...partial }));
   }
 
+  // Reroll to a different problem (weighted, never the current one).
+  function handleRandomize() {
+    setProblem((prev) => pickWeightedProblem(prev?.id));
+  }
+
   function handleStart() {
-    const pool = PROBLEM_BANK.filter((p) => p.difficulty === settings.difficulty);
-    const problem = pool[Math.floor(Math.random() * pool.length)];
-    setCurrentProblem(problem);
     setCode(problem.starterCode);
     setLastTestResults([]);
     setTranscript([]);
     setInterviewerImpressions("");
     setHintsUsed(0);
     setScorecard(null);
-    setScorecardError(null);
+    setReportError(null);
     setView("interview");
   }
 
-  async function generateScorecard(finalHintsUsed) {
-    setView("generating-scorecard");
-    setScorecardError(null);
+  // The interview screen owns the session log and hands up the derived signals
+  // (path trajectory, checkpoint notes, filler stats) that the report merges
+  // with the transcript/code/impressions App already holds.
+  async function generateReport(analysis) {
+    setView("generating-report");
+    setReportError(null);
     try {
-      const result = await callGeminiScorecard({
-        currentProblem,
+      const result = await callGeminiReport({
+        currentProblem: problem,
         code,
         lastTestResults,
         transcript,
         interviewerImpressions,
-        hintsUsed: finalHintsUsed,
+        hintsUsed: analysis.hintsUsed,
+        fillerStats: analysis.fillerStats,
+        progressSeries: analysis.progressSeries,
+        checkpointNotes: analysis.checkpointNotes,
       });
-      setScorecard({ ...result, hintsUsed: finalHintsUsed });
+      setScorecard(result);
       setView("scorecard");
     } catch (err) {
-      setScorecardError({ message: err.message, retry: () => generateScorecard(finalHintsUsed) });
+      setReportError({ message: err.message, retry: () => generateReport(analysis) });
     }
   }
 
-  function handleWrapUp() {
-    generateScorecard(hintsUsed);
-  }
-
   function handleRestart() {
-    setView("setup");
     setSettings(DEFAULT_SETTINGS);
-    setCurrentProblem(null);
+    setProblem(pickWeightedProblem());
     setCode("");
     setLastTestResults([]);
     setTranscript([]);
     setInterviewerImpressions("");
     setHintsUsed(0);
     setScorecard(null);
-    setScorecardError(null);
+    setReportError(null);
+    setView("setup");
   }
 
   if (view === "setup") {
-    return h(SetupScreen, { settings, onChangeSettings: handleChangeSettings, onStart: handleStart });
+    return h(SetupScreen, {
+      settings,
+      problem,
+      onChangeSettings: handleChangeSettings,
+      onRandomize: handleRandomize,
+      onStart: handleStart,
+    });
   }
 
   if (view === "interview") {
     return h(InterviewScreen, {
-      currentProblem,
+      currentProblem: problem,
       settings,
       code,
       setCode,
@@ -95,22 +109,22 @@ export default function App() {
       setInterviewerImpressions,
       hintsUsed,
       setHintsUsed,
-      onWrapUp: handleWrapUp,
+      onWrapUp: generateReport,
     });
   }
 
-  if (view === "generating-scorecard") {
+  if (view === "generating-report") {
     return h(
       "div",
       { className: "screen loading-screen" },
-      scorecardError
+      reportError
         ? h(
             "div",
             { className: "error-banner" },
-            h("span", null, `⚠️ Couldn't generate the scorecard: ${scorecardError.message}`),
-            h("button", { className: "btn btn-small", onClick: scorecardError.retry }, "Retry")
+            h("span", null, `⚠️ Couldn't generate the report: ${reportError.message}`),
+            h("button", { className: "btn btn-small", onClick: reportError.retry }, "Retry")
           )
-        : h("p", { className: "spinner-label" }, "Generating your coaching scorecard...")
+        : h("p", { className: "spinner-label" }, "Scoring your interview...")
     );
   }
 

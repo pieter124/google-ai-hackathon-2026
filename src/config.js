@@ -1,84 +1,181 @@
-// ---------------------------------------------------------------------------
-// Single source of truth for the Google API key used by all three direct
-// client calls (Gemini, Speech-to-Text, Text-to-Speech). No backend, so this
-// key must be restricted (in Google Cloud Console) to exactly those 3 APIs
-// and, ideally, to your demo's HTTP referrer.
-// ---------------------------------------------------------------------------
-export const GOOGLE_API_KEY = "PLACEHOLDER_API_KEY"; // replace with your own key, restricted to these 3 APIs
+// ===========================================================================
+// Single source of truth for tunable constants: API access, personas,
+// difficulty, the problem bank, the scoring rubric, and the timing thresholds
+// that drive the Aggregator and Watchdog agents. Everything a demo-runner
+// might want to tweak lives here so no behavior is buried in a component.
+// ===========================================================================
 
-// Model used for every Gemini call (interview turns + scorecard). Kept as a
-// single constant so it's a one-line change if the model name shown here
-// ever gets deprecated in favor of a newer one.
+// --- Google API key --------------------------------------------------------
+// No backend exists, so the key ships client-side. We read it from
+// localStorage FIRST (set once in devtools: `localStorage.GOOGLE_API_KEY='...'`)
+// and only fall back to the in-file placeholder. Rationale: this repo is
+// shared and pushed to a branch — a real key must never be committed. The key
+// must be restricted (Google Cloud Console) to exactly the 3 APIs used here
+// (Gemini, Speech-to-Text, Text-to-Speech) and ideally to the demo referrer.
+const PLACEHOLDER_API_KEY = "PLACEHOLDER_API_KEY";
+export function getApiKey() {
+  try {
+    const stored = localStorage.getItem("GOOGLE_API_KEY");
+    if (stored && stored.trim()) return stored.trim();
+  } catch {
+    /* localStorage can throw in locked-down browser contexts; ignore */
+  }
+  return PLACEHOLDER_API_KEY;
+}
+export const IS_API_KEY_SET = () => getApiKey() !== PLACEHOLDER_API_KEY;
+
+// Model used for every Gemini call. Single constant = one-line change if the
+// model name is ever deprecated.
 export const GEMINI_MODEL = "gemini-2.5-flash";
 
+// Optional looped avatar video shown in the top-right during the interview.
+// Drop a muted, seamless loop (e.g. a talking-head render) at this path and it
+// takes over from the animated orb automatically. Left null so there's no
+// broken-media icon until an asset exists.
+export const AVATAR_VIDEO_SRC = null; // e.g. "./assets/avatar.webm"
+
 // ---------------------------------------------------------------------------
-// Interviewer personas. `description` is what actually gets fed to Gemini as
-// the persona instruction; `label` is what shows up in the setup dropdown.
+// Interviewer difficulty. The candidate picks ONE of these on the setup
+// screen (the "difficulty of the interviewer"). Each maps to a persona
+// instruction fed into every Agent-1 turn plus a hint posture the Watchdog
+// and per-turn prompt both respect. Two tiers on purpose — a supportive one
+// and a rigorous one — because that is the single dial candidates actually
+// reason about ("go easy on me" vs "grill me").
 // ---------------------------------------------------------------------------
-export const PERSONAS = [
+export const INTERVIEWER_DIFFICULTIES = [
   {
-    id: "tech-lead",
-    label: "Technical Lead (skeptical, terse)",
+    id: "easy",
+    label: "Easy",
+    blurb: "Supportive · nudges you · forgiving",
+    hintPosture: "generous", // offers escalating hints readily
     description:
-      "a skeptical, terse technical lead. You speak in short sentences, rarely offer praise, and push hard on edge cases, correctness, and complexity. You expect the candidate to justify every design choice.",
+      "a warm, supportive interviewer. You encourage the candidate, ask open-ended questions about their approach, and offer escalating hints readily when they slow down — starting vague and getting more concrete only if they stay stuck. You are patient and rarely apply time pressure.",
   },
   {
-    id: "hr-screener",
-    label: "HR-style Screener (friendly, broad)",
+    id: "hard",
+    label: "Hard",
+    blurb: "Terse bar-raiser · edge cases · minimal help",
+    hintPosture: "sparing", // withholds hints, expects candidate to drive
     description:
-      "a friendly, encouraging HR-style screener. You are warm and supportive, ask broad open-ended questions about approach and communication, and are less focused on deep technical rigor than on how the candidate thinks and communicates.",
-  },
-  {
-    id: "hostile",
-    label: "Hostile Stress-Tester (interrupts, pressure)",
-    description:
-      "a hostile stress-testing interviewer. You apply time pressure, interrupt with pointed challenges, question the candidate's assumptions aggressively, and rarely let a claim pass unchallenged.",
-  },
-  {
-    id: "friendly-vague",
-    label: "Friendly-but-vague (rambles, hard to read)",
-    description:
-      "a friendly but vague interviewer. You ramble, give meandering and indirect feedback, and are generally hard to read — it should often be unclear to the candidate whether you're satisfied or concerned.",
+      "a terse, high-bar interviewer in the mold of a Google bar-raiser. You speak in short sentences, rarely offer praise or reassurance, push hard on correctness, complexity, and edge cases, and expect the candidate to drive the conversation. You give hints sparingly and only after the candidate has clearly tried.",
   },
 ];
 
-// Auto-selected default persona for difficulties other than google-hard.
-const DEFAULT_PERSONA_ID = "tech-lead";
-
-// google-hard problems default to a terser, more pressuring persona than the
-// candidate's dropdown pick would otherwise imply — unless they explicitly
-// chose a specific persona (anything other than "Auto"), which always wins.
-const BAR_RAISER_DESCRIPTION =
-  "a terse, pressuring Google-style bar-raiser. You hold a very high bar, rarely offer reassurance, move quickly past small talk into complexity and edge cases, and expect the candidate to drive the conversation with minimal prompting from you.";
-
-// Resolves the setup screen's persona choice (which may be "auto") plus the
-// chosen problem's difficulty into the actual instruction text sent to
-// Gemini as "this persona: {...}".
-export function resolvePersonaDescription(settings, problem) {
-  if (settings.persona !== "auto") {
-    const picked = PERSONAS.find((p) => p.id === settings.persona);
-    return picked ? picked.description : PERSONAS.find((p) => p.id === DEFAULT_PERSONA_ID).description;
-  }
-  if (problem && problem.difficulty === "google-hard") return BAR_RAISER_DESCRIPTION;
-  return PERSONAS.find((p) => p.id === DEFAULT_PERSONA_ID).description;
+export function resolveInterviewer(difficultyId) {
+  return (
+    INTERVIEWER_DIFFICULTIES.find((d) => d.id === difficultyId) || INTERVIEWER_DIFFICULTIES[0]
+  );
 }
 
-export const PERSONA_OPTIONS = [
-  { id: "auto", label: "Auto (recommended for difficulty)" },
-  ...PERSONAS.map((p) => ({ id: p.id, label: p.label })),
+// ---------------------------------------------------------------------------
+// Session length options (minutes). Stored as minutes here; converted to ms
+// at the timer. 30/45 mirror a real phone-screen / onsite slot.
+// ---------------------------------------------------------------------------
+export const SESSION_LENGTHS = [
+  { id: 30, label: "30 min" },
+  { id: 45, label: "45 min" },
 ];
 
-export const DIFFICULTY_OPTIONS = [
-  { id: "easy", label: "Easy" },
-  { id: "medium", label: "Medium" },
-  { id: "hard", label: "Hard" },
-  { id: "google-hard", label: "Google Hard" },
+// ---------------------------------------------------------------------------
+// Problem-selection weights. The candidate's request: problems should be
+// "medium minimum" — so easy is weight 0 (still in the bank for reference, but
+// the randomizer never rolls it). Medium is the floor, hard/google-hard are
+// well represented. Tune here without touching the picker logic.
+// ---------------------------------------------------------------------------
+export const DIFFICULTY_WEIGHTS = {
+  easy: 0,
+  medium: 50,
+  hard: 30,
+  "google-hard": 20,
+};
+
+// ---------------------------------------------------------------------------
+// Agent 2 (Aggregator) + Agent 3 (Watchdog) timing. Placeholder values here
+// are UI-adapted starting points; the two research passes refine the numbers.
+// All in milliseconds.
+// ---------------------------------------------------------------------------
+export const AGGREGATOR_INTERVAL_MS = 120000; // windowed analysis every ~2 min (short enough that a demo shows at least one checkpoint)
+
+// Thresholds below are research-adapted (wait-time, ITS idle, assistance-
+// dilemma literature): protect think-time, treat silence as productive while
+// typing/narrating, and require a sustained stuck pattern before stepping in.
+// See RESEARCH.md for citations.
+export const WATCHDOG = {
+  checkEveryMs: 3000, // re-evaluate heuristics every 3s (also the keystroke-snapshot cadence)
+  silentIdleMs: 35000, // no typing AND no turn sent this long → intervene (30-45s "hard idle" band; below this is protected think-time)
+  fillerRatioThreshold: 0.28, // filler fraction in recent speech that reads as "talking without progress"
+  minCooldownMs: 75000, // one nudge per ~75s max (research: ~60-90s between hint-ladder steps), so it can't spam
+};
+
+// ---------------------------------------------------------------------------
+// Scoring rubric. Each dimension is scored 1-5 by the end-of-session report
+// call. Anchors are deliberately concrete so the LLM scorer is consistent.
+// These are placeholders pending the evaluation-criteria research pass; the
+// dimension SET is stable, the anchor wording will be tightened from sources.
+// ---------------------------------------------------------------------------
+// Anchors are the intersection of Google's four attributes, Meta's four
+// signals, and the ML-system-design dimensions, written for an LLM scorer
+// (Naim et al. 2018; "Rubric Is All You Need," ICER 2025). See RESEARCH.md.
+// Communication is intended as a CAP, not an additive — a strong coder the
+// interviewer can't follow is a real-world reject; the report prompt enforces
+// that.
+export const RUBRIC = [
+  {
+    id: "problemSolving",
+    label: "Problem-solving & approach",
+    definition: "Decodes an ambiguous problem, structures an approach, and iterates toward a correct/optimal solution.",
+    anchors: {
+      1: "No coherent plan; never reaches a viable path even with heavy hints",
+      3: "Reaches a working approach, but only after prompting; misses obvious sub-cases",
+      5: "Independently clarifies, decomposes, weighs multiple approaches, drives to the optimal one with no substantive hints",
+    },
+  },
+  {
+    id: "coding",
+    label: "Coding & correctness",
+    definition: "Translates the approach into correct, clean, idiomatic code that passes the tests.",
+    anchors: {
+      1: "Major logic/syntax errors; code doesn't run or is fundamentally wrong",
+      3: "Mostly working with minor bugs; not clean/idiomatic",
+      5: "Clean, correct, idiomatic; handles edge cases",
+    },
+  },
+  {
+    id: "communication",
+    label: "Communication",
+    definition: "Whether the interviewer can follow the reasoning in real time, and how well feedback is incorporated.",
+    anchors: {
+      1: "Interviewer can't follow; silent/disorganized; ignores hints",
+      3: "Followable with effort; explains after the fact; integrates hints slowly",
+      5: "Narrates while working, asks sharp clarifying questions up front, explicitly uses feedback",
+    },
+  },
+  {
+    id: "verification",
+    label: "Verification & testing",
+    definition: "Proactively tests the solution and reasons about edge cases and failure modes.",
+    anchors: {
+      1: "No testing; ignores edge cases",
+      3: "Tests the happy path when prompted; catches some edge cases",
+      5: "Self-verifies unprompted; walks edge cases as a habit",
+    },
+  },
+  {
+    id: "complexity",
+    label: "Complexity & trade-offs",
+    definition: "Reasons about time/space complexity and compares design trade-offs.",
+    anchors: {
+      1: "Can't state complexity; unaware of trade-offs",
+      3: "States correct big-O when asked; sees one trade-off",
+      5: "Proactively analyzes complexity, compares alternatives, optimizes with justification",
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
 // Curated problem bank — hardcoded on purpose (no AI-generated problems).
 // Every problem exposes a single `solve` function so the sandbox runner and
-// test-case format can stay identical across difficulties.
+// test-case format stay identical across difficulties.
 // ---------------------------------------------------------------------------
 export const PROBLEM_BANK = [
   {

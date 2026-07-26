@@ -9,22 +9,68 @@ export function blobToBase64(blob) {
   });
 }
 
-// Plays a base64 MP3 payload (from Cloud Text-to-Speech). Never rejects:
-// browsers may block autoplay outside a user gesture, and we don't want that
-// to strand the UI — the interviewer's line is always shown as text too, so
-// audio is a bonus, not a requirement. Resolves { played: bool }.
-export function playBase64Audio(base64Mp3) {
+// One shared AudioContext for the whole app. Created lazily on first playback
+// (which always follows a user gesture, so autoplay policy is satisfied) and
+// reused — browsers cap the number of live contexts, and one is all we need.
+let sharedCtx = null;
+function getAudioContext() {
+  if (!sharedCtx) {
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    sharedCtx = Ctor ? new Ctor() : null;
+  }
+  if (sharedCtx && sharedCtx.state === "suspended") sharedCtx.resume().catch(() => {});
+  return sharedCtx;
+}
+
+// Plays a base64 MP3 (from Cloud Text-to-Speech) and, while it plays, streams
+// a normalized 0..1 amplitude to `onAmplitude` so the avatar can pulse in time
+// with the voice. Never rejects: browsers may block autoplay and the text is
+// always shown as a caption too, so audio is a bonus, not a requirement.
+// Routes through Web Audio for the amplitude tap; if that path fails it
+// degrades to plain playback with no pulse.
+export function playBase64Audio(base64Mp3, onAmplitude = () => {}) {
   return new Promise((resolve) => {
-    try {
-      const audio = new Audio(`data:audio/mp3;base64,${base64Mp3}`);
-      audio.onended = () => resolve({ played: true, audio });
-      audio.onerror = () => resolve({ played: false, audio });
-      const playPromise = audio.play();
-      if (playPromise && typeof playPromise.catch === "function") {
-        playPromise.catch(() => resolve({ played: false, audio }));
+    const audio = new Audio(`data:audio/mp3;base64,${base64Mp3}`);
+
+    let rafId = null;
+    let done = false;
+    function finish(played) {
+      if (done) return;
+      done = true;
+      if (rafId) cancelAnimationFrame(rafId);
+      onAmplitude(0);
+      resolve({ played });
+    }
+
+    audio.onended = () => finish(true);
+    audio.onerror = () => finish(false);
+
+    const ctx = getAudioContext();
+    if (ctx) {
+      try {
+        const source = ctx.createMediaElementSource(audio);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        analyser.connect(ctx.destination);
+        const bins = new Uint8Array(analyser.frequencyBinCount);
+        const tick = () => {
+          analyser.getByteFrequencyData(bins);
+          let sum = 0;
+          for (let i = 0; i < bins.length; i++) sum += bins[i];
+          onAmplitude(Math.min(1, sum / bins.length / 128)); // avg byte (0..255) → ~0..1
+          rafId = requestAnimationFrame(tick);
+        };
+        tick();
+      } catch {
+        /* createMediaElementSource throws if the element was already tapped or
+           the context is unavailable; fall through to plain playback */
       }
-    } catch (err) {
-      resolve({ played: false, audio: null });
+    }
+
+    const playPromise = audio.play();
+    if (playPromise && typeof playPromise.catch === "function") {
+      playPromise.catch(() => finish(false));
     }
   });
 }

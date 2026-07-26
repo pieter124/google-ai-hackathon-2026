@@ -1,4 +1,4 @@
-import { GOOGLE_API_KEY } from "../config.js";
+import { getApiKey } from "../config.js";
 
 async function fetchWithTimeout(url, options, timeoutMs = 15000) {
   const controller = new AbortController();
@@ -21,7 +21,7 @@ async function fetchWithTimeout(url, options, timeoutMs = 15000) {
 // once per push-to-talk turn, right after the candidate stops recording.
 // ---------------------------------------------------------------------------
 export async function speechToText(base64Audio) {
-  const res = await fetchWithTimeout(`https://speech.googleapis.com/v1/speech:recognize?key=${GOOGLE_API_KEY}`, {
+  const res = await fetchWithTimeout(`https://speech.googleapis.com/v1/speech:recognize?key=${getApiKey()}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -60,7 +60,7 @@ export async function speechToText(base64Audio) {
 // case autoplay is blocked.
 // ---------------------------------------------------------------------------
 export async function textToSpeech(text, voiceName = "en-US-Neural2-D") {
-  const res = await fetchWithTimeout(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${GOOGLE_API_KEY}`, {
+  const res = await fetchWithTimeout(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${getApiKey()}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
