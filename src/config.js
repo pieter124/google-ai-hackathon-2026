@@ -42,30 +42,66 @@ export const AVATAR_VIDEO_SRC = null; // e.g. "./assets/avatar.webm"
 // and a rigorous one — because that is the single dial candidates actually
 // reason about ("go easy on me" vs "grill me").
 // ---------------------------------------------------------------------------
-export const INTERVIEWER_DIFFICULTIES = [
+// Four named interviewers (ported from the team's `main` branch). Each is a
+// persona fed to Gemini plus the presentation the candidate picks: a name, a
+// title, a one-line blurb, a Cloud TTS voice (passed straight into our
+// textToSpeech call, so each interviewer literally sounds different), and a
+// `hintPosture` the Watchdog and per-turn prompt both respect. The
+// easy↔hard dial the candidate reasons about now lives in the persona's tone:
+// Maya is the "easy" end, the other three raise the bar.
+export const INTERVIEWERS = [
   {
-    id: "easy",
-    label: "Easy",
-    blurb: "Supportive · nudges you · forgiving",
-    hintPosture: "generous", // offers escalating hints readily
+    id: "maya",
+    name: "Maya Chen",
+    title: "Senior Software Engineer",
+    blurb: "Warm · gives you room to think · easy",
+    voiceName: "en-US-Neural2-F",
+    hintPosture: "generous",
     description:
-      "a warm, supportive interviewer. You encourage the candidate, ask open-ended questions about their approach, and offer escalating hints readily when they slow down — starting vague and getting more concrete only if they stay stuck. You are patient and rarely apply time pressure.",
+      "a supportive, encouraging interviewer named Maya Chen, a Senior Software Engineer. You give the candidate room to think out loud, offer warmth when they're stuck, and favor escalating, non-bottom-out hints — start vague, and only get more concrete if they're still stuck after trying.",
   },
   {
-    id: "hard",
-    label: "Hard",
-    blurb: "Terse bar-raiser · edge cases · minimal help",
-    hintPosture: "sparing", // withholds hints, expects candidate to drive
+    id: "victor",
+    name: "Victor Osei",
+    title: "Staff Engineer",
+    blurb: "High bar · edge cases · few pleasantries",
+    voiceName: "en-US-Neural2-J",
+    hintPosture: "sparing",
     description:
-      "a terse, high-bar interviewer in the mold of a Google bar-raiser. You speak in short sentences, rarely offer praise or reassurance, push hard on correctness, complexity, and edge cases, and expect the candidate to drive the conversation. You give hints sparingly and only after the candidate has clearly tried.",
+      "a rigorous, high-bar interviewer named Victor Osei, a Staff Engineer. You push on edge cases, correctness, and complexity, rarely offer reassurance, and expect the candidate to drive — but still give escalating, non-bottom-out hints rather than the full solution when they're stuck.",
+  },
+  {
+    id: "priya",
+    name: "Priya Raghavan",
+    title: "Engineering Manager",
+    blurb: "Pragmatic · cares about trade-offs & clarity",
+    voiceName: "en-US-Neural2-C",
+    hintPosture: "sparing",
+    description:
+      "a pragmatic, direct interviewer named Priya Raghavan, an Engineering Manager. You care most about clear trade-off reasoning and structured communication: you interrupt rambling politely, ask 'why this approach over the alternative?', and expect the candidate to state assumptions and complexity unprompted. Hints are brief and Socratic, never the answer.",
+  },
+  {
+    id: "erik",
+    name: "Erik Lindqvist",
+    title: "Principal Engineer",
+    blurb: "Calm pressure · silence · 'what breaks at scale?'",
+    voiceName: "en-US-Studio-Q",
+    hintPosture: "sparing",
+    description:
+      "a calm but intense interviewer named Erik Lindqvist, a Principal Engineer known for pressure-testing candidates. You speak sparingly, let silences hang, and follow nearly every answer with a harder follow-up: scale limits, failure modes, pathological inputs. You are fair but skeptical by default, and your hints are the smallest possible push — never more.",
   },
 ];
 
-export function resolveInterviewer(difficultyId) {
-  return (
-    INTERVIEWER_DIFFICULTIES.find((d) => d.id === difficultyId) || INTERVIEWER_DIFFICULTIES[0]
-  );
+export function resolveInterviewer(id) {
+  return INTERVIEWERS.find((p) => p.id === id) || INTERVIEWERS[0];
 }
+
+// Editor languages — both run entirely client-side: JavaScript in a Web
+// Worker (utils/sandbox.js), Python via a Pyodide worker (utils/pythonRunner.js).
+export const LANGUAGE_OPTIONS = [
+  { id: "javascript", label: "JavaScript" },
+  { id: "python", label: "Python" },
+];
 
 // ---------------------------------------------------------------------------
 // Session length options (minutes). Stored as minutes here; converted to ms
@@ -185,7 +221,7 @@ export const PROBLEM_BANK = [
     description:
       "Given an array of integers nums and an integer target, return indices of the two numbers that add up to target. Assume exactly one solution exists, and you may not use the same element twice.",
     functionName: "solve",
-    starterCode: "function solve(nums, target) {\n  \n}",
+    starterCode: { javascript: "function solve(nums, target) {\n  \n}", python: "def solve(nums, target):\n    pass\n" },
     testCases: [
       { input: [[2, 7, 11, 15], 9], expected: [0, 1] },
       { input: [[3, 2, 4], 6], expected: [1, 2] },
@@ -199,7 +235,7 @@ export const PROBLEM_BANK = [
     description:
       "Given a string s containing just the characters '(', ')', '{', '}', '[' and ']', determine if the input string is valid: every open bracket must be closed by the same type of bracket, and in the correct order.",
     functionName: "solve",
-    starterCode: "function solve(s) {\n  \n}",
+    starterCode: { javascript: "function solve(s) {\n  \n}", python: "def solve(s):\n    pass\n" },
     testCases: [
       { input: ["()[]{}"], expected: true },
       { input: ["(]"], expected: false },
@@ -214,7 +250,7 @@ export const PROBLEM_BANK = [
     description:
       "Given a string s, return the length of the longest substring of s without repeating characters.",
     functionName: "solve",
-    starterCode: "function solve(s) {\n  \n}",
+    starterCode: { javascript: "function solve(s) {\n  \n}", python: "def solve(s):\n    pass\n" },
     testCases: [
       { input: ["abcabcbb"], expected: 3 },
       { input: ["bbbbb"], expected: 1 },
@@ -229,7 +265,7 @@ export const PROBLEM_BANK = [
     description:
       "Given an integer array nums, return an array answer such that answer[i] is equal to the product of all elements of nums except nums[i]. Do this without using the division operator, in O(n) time.",
     functionName: "solve",
-    starterCode: "function solve(nums) {\n  \n}",
+    starterCode: { javascript: "function solve(nums) {\n  \n}", python: "def solve(nums):\n    pass\n" },
     testCases: [
       { input: [[1, 2, 3, 4]], expected: [24, 12, 8, 6] },
       { input: [[-1, 1, 0, -3, 3]], expected: [0, 0, 9, 0, 0] },
@@ -242,7 +278,7 @@ export const PROBLEM_BANK = [
     description:
       "Given n non-negative integers representing an elevation map where the width of each bar is 1, compute how much water it can trap after raining.",
     functionName: "solve",
-    starterCode: "function solve(height) {\n  \n}",
+    starterCode: { javascript: "function solve(height) {\n  \n}", python: "def solve(height):\n    pass\n" },
     testCases: [
       { input: [[0, 1, 0, 2, 1, 0, 1, 3, 2, 1, 2, 1]], expected: 6 },
       { input: [[4, 2, 0, 3, 2, 5]], expected: 9 },
@@ -256,7 +292,7 @@ export const PROBLEM_BANK = [
     description:
       "Given two sorted arrays nums1 and nums2 of size m and n respectively, return the median of the two sorted arrays. Aim for O(log(m+n)) time.",
     functionName: "solve",
-    starterCode: "function solve(nums1, nums2) {\n  \n}",
+    starterCode: { javascript: "function solve(nums1, nums2) {\n  \n}", python: "def solve(nums1, nums2):\n    pass\n" },
     testCases: [
       { input: [[1, 3], [2]], expected: 2 },
       { input: [[1, 2], [3, 4]], expected: 2.5 },
@@ -270,7 +306,7 @@ export const PROBLEM_BANK = [
     description:
       "Given a string s and a dictionary of strings wordDict, return true if s can be segmented into a space-separated sequence of one or more dictionary words.",
     functionName: "solve",
-    starterCode: "function solve(s, wordDict) {\n  \n}",
+    starterCode: { javascript: "function solve(s, wordDict) {\n  \n}", python: "def solve(s, wordDict):\n    pass\n" },
     testCases: [
       { input: ["leetcode", ["leet", "code"]], expected: true },
       { input: ["applepenapple", ["apple", "pen"]], expected: true },
@@ -284,7 +320,7 @@ export const PROBLEM_BANK = [
     description:
       "There are numCourses courses labeled 0 to numCourses-1. You are given an array prerequisites where prerequisites[i] = [a, b] means you must take course b before course a. Return true if it's possible to finish all courses (i.e. the prerequisite graph has no cycle).",
     functionName: "solve",
-    starterCode: "function solve(numCourses, prerequisites) {\n  \n}",
+    starterCode: { javascript: "function solve(numCourses, prerequisites) {\n  \n}", python: "def solve(numCourses, prerequisites):\n    pass\n" },
     testCases: [
       { input: [2, [[1, 0]]], expected: true },
       { input: [2, [[1, 0], [0, 1]]], expected: false },

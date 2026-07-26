@@ -9,7 +9,7 @@ import { AVATAR_VIDEO_SRC } from "../config.js";
 // it at ~60fps, and driving that through React state would re-render the whole
 // interview screen every frame. Instead this component runs one rAF loop that
 // reads the ref and writes the orb's transform straight to the DOM.
-export default function Avatar({ state, amplitudeRef, caption }) {
+export default function Avatar({ state, amplitudeRef, caption, name }) {
   const orbRef = useRef(null);
 
   useEffect(() => {
@@ -58,6 +58,7 @@ export default function Avatar({ state, amplitudeRef, caption }) {
           ),
       statusLabel && h("span", { className: "avatar-status" }, statusLabel)
     ),
+    name && h("div", { className: "avatar-name" }, name),
     caption && h("div", { className: "avatar-caption" }, caption)
   );
 }

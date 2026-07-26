@@ -3,6 +3,7 @@ import { EditorState } from "https://esm.sh/@codemirror/state@6";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "https://esm.sh/@codemirror/view@6";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "https://esm.sh/@codemirror/commands@6";
 import { javascript } from "https://esm.sh/@codemirror/lang-javascript@6";
+import { python } from "https://esm.sh/@codemirror/lang-python@6";
 import { oneDark } from "https://esm.sh/@codemirror/theme-one-dark@6";
 
 // CodeMirror 6 wrapped as a React component. The editor is imperative by
@@ -11,7 +12,7 @@ import { oneDark } from "https://esm.sh/@codemirror/theme-one-dark@6";
 // problem's starterCode by remounting this component with a fresh `key`
 // (see InterviewScreen) rather than by reconfiguring state in place — much
 // simpler than reconciling CodeMirror's internal state from the outside.
-export default function CodeEditor({ initialCode, onChange }) {
+export default function CodeEditor({ initialCode, language, onChange }) {
   const containerRef = useRef(null);
   const viewRef = useRef(null);
 
@@ -24,7 +25,7 @@ export default function CodeEditor({ initialCode, onChange }) {
         highlightActiveLineGutter(),
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-        javascript(),
+        language === "python" ? python() : javascript(),
         oneDark,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) onChange(update.state.doc.toString());

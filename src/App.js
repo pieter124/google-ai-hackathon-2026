@@ -5,9 +5,9 @@ import SetupScreen from "./components/SetupScreen.js";
 import InterviewScreen from "./components/InterviewScreen.js";
 import ScorecardScreen from "./components/ScorecardScreen.js";
 
-// Interviewer difficulty (easy/hard persona), not problem difficulty — the
-// problem is rolled by the weighted randomizer. Session length in minutes.
-const DEFAULT_SETTINGS = { difficulty: "easy", sessionLength: 30 };
+// interviewerId picks the persona + voice; language picks the editor + runner;
+// the problem itself is rolled by the weighted randomizer. Length in minutes.
+const DEFAULT_SETTINGS = { interviewerId: "maya", language: "javascript", sessionLength: 30 };
 
 // Top-level state machine. Everything is plain React state — per the hard
 // constraints nothing persists across a refresh and there is no backend.
@@ -36,7 +36,7 @@ export default function App() {
   }
 
   function handleStart() {
-    setCode(problem.starterCode);
+    setCode(problem.starterCode[settings.language] || problem.starterCode.javascript);
     setLastTestResults([]);
     setTranscript([]);
     setHintsUsed(0);

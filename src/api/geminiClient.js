@@ -93,7 +93,7 @@ export async function callGeminiInterviewTurn({
   currentProblem,
   personaDescription,
   hintPosture,
-  difficulty,
+  language,
   code,
   lastTestResults,
   transcript,
@@ -102,7 +102,7 @@ export async function callGeminiInterviewTurn({
 }) {
   const prompt = `You are acting as a coding interviewer with this persona: ${personaDescription}
 Hint posture: ${hintPosture === "generous" ? "offer escalating hints readily — vague first, more concrete only if they stay stuck" : "give hints sparingly; expect the candidate to drive and only nudge after they've clearly tried"}.
-Interviewer difficulty: ${difficulty}.
+The candidate is coding in ${language || "javascript"} (the solve function).
 Problem: ${currentProblem.title} — ${currentProblem.description}
 
 Candidate's current code:

@@ -1,4 +1,5 @@
 import { deepEqual } from "./deepEqual.js";
+import { runPythonTest } from "./pythonRunner.js";
 
 // ---------------------------------------------------------------------------
 // SANDBOX EXECUTION — runs candidate JavaScript entirely client-side, with no
@@ -63,12 +64,16 @@ function runInSandbox(code, testInput, timeoutMs = 3000) {
 }
 
 // Runs every test case for the current problem against the candidate's
-// current editor contents, one sandboxed Worker per case, and returns the
-// `lastTestResults` array shape the rest of the app expects.
-export async function runAllTests(code, testCases) {
+// current editor contents and returns the `lastTestResults` array shape the
+// rest of the app expects. Dispatches on language: JavaScript runs in a
+// disposable Web Worker per case (runInSandbox); Python runs in the persistent
+// Pyodide worker (runPythonTest). Both return the same { ok, result } / { ok,
+// error } shape, so the result-building below is identical for both.
+export async function runAllTests(code, testCases, language = "javascript") {
+  const runOne = language === "python" ? runPythonTest : runInSandbox;
   const results = [];
   for (const tc of testCases) {
-    const outcome = await runInSandbox(code, tc.input);
+    const outcome = await runOne(code, tc.input);
     if (outcome.ok) {
       results.push({
         passed: deepEqual(outcome.result, tc.expected),

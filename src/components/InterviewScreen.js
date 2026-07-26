@@ -8,6 +8,7 @@ import { createVoiceRecorder } from "../utils/voiceRecorder.js";
 import { blobToBase64, playBase64Audio } from "../utils/audio.js";
 import { createSessionLog } from "../utils/sessionLog.js";
 import { analyzeFillers, recentFillerRatio } from "../utils/fillerWords.js";
+import { preloadPython, getPythonStatus, onPythonStatusChange } from "../utils/pythonRunner.js";
 import { speechToText, textToSpeech } from "../api/speechClient.js";
 import { callGeminiInterviewTurn, callGeminiCheckpoint } from "../api/geminiClient.js";
 
@@ -95,7 +96,18 @@ export default function InterviewScreen({
   const checkpointInFlightRef = useRef(false);
   const wrappedRef = useRef(false);
 
-  const interviewer = resolveInterviewer(settings.difficulty);
+  const interviewer = resolveInterviewer(settings.interviewerId);
+
+  // Python: kick off the ~10MB Pyodide download when the session starts (so
+  // the first Run doesn't eat the whole load), and mirror its load state into
+  // a hint next to the Run button.
+  const [pythonStatus, setPythonStatus] = useState(getPythonStatus());
+  useEffect(() => {
+    if (settings.language !== "python") return;
+    const unsub = onPythonStatusChange(setPythonStatus);
+    preloadPython();
+    return unsub;
+  }, [settings.language]);
 
   // -----------------------------------------------------------------------
   // Shared turn runner — used by voice, run-code, and the Watchdog nudge, so
@@ -117,11 +129,11 @@ export default function InterviewScreen({
         currentProblem,
         personaDescription: interviewer.description,
         hintPosture: interviewer.hintPosture,
-        difficulty: settings.difficulty,
         code: codeRef.current,
         lastTestResults: lastTestResultsRef.current,
         transcript: transcriptSoFar,
         liveCriteria: liveCriteriaRef.current,
+        language: settings.language,
         latestEvent,
       });
     } catch (err) {
@@ -148,7 +160,7 @@ export default function InterviewScreen({
     // hiccup or blocked autoplay must never strand the UI.
     setMicState("speaking");
     try {
-      const audioB64 = await textToSpeech(turn.response);
+      const audioB64 = await textToSpeech(turn.response, interviewer.voiceName);
       await playBase64Audio(audioB64, (v) => { amplitudeRef.current = v; });
     } catch (err) {
       console.warn("Text-to-Speech unavailable:", err.message);
@@ -336,7 +348,7 @@ export default function InterviewScreen({
     if (errorBanner || runningTests || micState !== "idle") return;
     setRunningTests(true);
     markActivity();
-    const results = await runAllTests(codeRef.current, currentProblem.testCases);
+    const results = await runAllTests(codeRef.current, currentProblem.testCases, settings.language);
     setLastTestResults(results);
     lastTestResultsRef.current = results;
     logRef.current.logRun({ passed: results.filter((r) => r.passed).length, total: results.length });
@@ -366,7 +378,7 @@ export default function InterviewScreen({
     h(
       "div",
       { className: "right-rail" },
-      h(Avatar, { state: micState, amplitudeRef, caption }),
+      h(Avatar, { state: micState, amplitudeRef, caption, name: interviewer.name }),
       h(CriteriaMatrix, { liveCriteria })
     ),
 
@@ -404,6 +416,7 @@ export default function InterviewScreen({
     h(CodeEditor, {
       key: currentProblem.id,
       initialCode: code,
+      language: settings.language,
       onChange: (next) => {
         setCode(next);
         markActivity({ typed: true });
@@ -423,6 +436,8 @@ export default function InterviewScreen({
         },
         runningTests ? "Running…" : "Run code"
       ),
+      settings.language === "python" && pythonStatus !== "ready" &&
+        h("span", { className: "py-status" }, pythonStatus === "loading" ? "Loading Python runtime…" : "Python loads on first run"),
       h(
         "div",
         { className: "test-results" },
