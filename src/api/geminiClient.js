@@ -6,12 +6,46 @@ import { mergeCriteriaLog } from "../utils/criteria.js";
 const GEMINI_PROXY_ENDPOINT = "/api/gemini/generate";
 const VALID_CRITERIA_IDS = CRITERIA_DEFINITIONS.map((c) => c.id).join(", ");
 
+// The anchored rubric, rendered once from config so the live matrix, the
+// checkpoints and the final report all score against identical wording.
+// Anchors, not just labels, are what stop an LLM scorer drifting between
+// turns — see RESEARCH.md.
+const CRITERIA_SPEC = CRITERIA_DEFINITIONS.map(
+  (c) => `- ${c.id} ("${c.label}"): ${c.definition} [1 = ${c.anchors[1]}; 3 = ${c.anchors[3]}; 5 = ${c.anchors[5]}]`
+).join("\n");
+
 // Shared by every scoring prompt (turn, checkpoint, scorecard) so the live
 // matrix and the final report stay consistent in strictness.
-const GRADING_RUBRIC = `Grade against a real top-tier hiring bar, strictly:
+const GRADING_RUBRIC = `Grade against a real top-tier hiring bar, strictly, using these anchored dimensions:
+${CRITERIA_SPEC}
 - 1 = well below bar, 2 = below bar, 3 = meets the bar with reservations, 4 = clearly strong, 5 = exceptional and rare — most sessions should never see a 5.
 - Actively penalize: missing or hand-wavy complexity discussion, unhandled edge cases, rambling or unclear communication, needing proactive nudges, and code that doesn't pass the tests.
+- Communication is a CAP, not an additive: if the interviewer struggled to follow the candidate, no other dimension may exceed the communication score by more than 1. A strong coder nobody can follow is a real-world reject.
 - Never inflate a score to be kind; when torn between two scores, give the lower one.`;
+
+// Per-turn interviewer behavior, adapted from the conversation-dynamics and
+// intelligent-tutoring literature (talk ratio, wait-time, the assistance
+// dilemma, and the hint ladder — citations in RESEARCH.md). Kept separate
+// from the persona text so every character obeys the same pedagogy while
+// still sounding like themselves.
+const INTERVIEWER_BEHAVIOR = `Interviewer behavior (research-backed): let the candidate do roughly 60% of the
+talking and drive the session; be quietest while they are actively coding, and
+don't rush to fill a short silence — think-time is productive. When they are
+stuck, climb a hint ladder ONE rung at a time — (0) reflective prompt ("talk me
+through what you have"), (1) point at where to look, (2) name the technique,
+(3) the concrete next step — and NEVER volunteer the near-answer bottom-out
+hint unless time is nearly up.`;
+
+// What each phase of the session means for the interviewer, so a turn fired
+// during "read the problem" doesn't behave like one fired mid-implementation.
+const PHASE_GUIDANCE = {
+  reading:
+    "PHASE: the candidate is inside their 3-minute reading window. Answer clarifying questions about the problem, but do NOT discuss solutions, approaches, or hints yet.",
+  approach:
+    "PHASE: the candidate should be explaining their intended approach out loud, before writing code. Probe the plan — complexity, edge cases, why this over the alternative — rather than the code.",
+  implementing:
+    "PHASE: the candidate is implementing. Stay mostly quiet, react to what they write and run, and intervene only per your hint posture.",
+};
 
 const LANGUAGE_LABELS = { javascript: "JavaScript", python: "Python" };
 
@@ -88,6 +122,16 @@ function extractText(geminiData) {
   return parts.map((p) => p.text || "").join("");
 }
 
+// Agent 1 and Agent 2 each rate the candidate's CURRENT trajectory from -1
+// (moving away from a correct solution) to +1 (closing in). The series of
+// these is what the scorecard's path chart draws, so a missing or garbage
+// value has to degrade to "treading water" rather than break the chart.
+function clampProgress(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-1, Math.min(1, n));
+}
+
 // Keep only known criterion ids with a valid 1-5 score, so a hallucinated id
 // or malformed score can't corrupt the log.
 function sanitizeCriteriaUpdate(raw) {
@@ -110,6 +154,8 @@ function sanitizeCriteriaUpdate(raw) {
 export async function callGeminiInterviewTurn({
   currentProblem,
   personaDescription,
+  hintPosture,
+  phase,
   language,
   code,
   lastTestResults,
@@ -119,6 +165,12 @@ export async function callGeminiInterviewTurn({
   audio, // optional { base64, mimeType }
 }) {
   const prompt = `You are acting as a coding interviewer with this persona: ${personaDescription}
+Hint posture: ${
+    hintPosture === "generous"
+      ? "offer escalating hints readily — vague first, more concrete only if they stay stuck"
+      : "give hints sparingly; expect the candidate to drive, and only nudge once they have clearly tried"
+  }.
+${PHASE_GUIDANCE[phase] || PHASE_GUIDANCE.implementing}
 Problem:
 ${describeProblem(currentProblem)}
 
@@ -147,13 +199,19 @@ on anything vague or ask about complexity/edge cases. If this is a proactive
 nudge (the candidate seems stuck), offer a small escalating hint in character
 without giving away the full solution — start vague, only get more concrete
 if they were already stuck last time too. Stay in character for the persona
-given. After forming your response, update whichever of these criteria you
-now have real signal for (valid ids: ${VALID_CRITERIA_IDS}) — it's fine to
-leave others out if this turn didn't touch them.
+given.
+
+${INTERVIEWER_BEHAVIOR}
+
+After forming your response, rate the candidate's CURRENT trajectory in
+"progress", from -1 (moving away from a correct or optimal solution) through 0
+(treading water) to +1 (closing in on it). Then update whichever of these
+criteria you now have real signal for (valid ids: ${VALID_CRITERIA_IDS}) —
+it's fine to leave others out if this turn didn't touch them.
 ${GRADING_RUBRIC}${audio ? '\nAlso transcribe the candidate\'s spoken words from the attached audio, verbatim, into "candidateTranscript".' : ""}
 
 Return ONLY valid JSON in this exact shape, no other text:
-{ "response": "..."${audio ? ', "candidateTranscript": "..."' : ""}, "criteriaUpdate": { "<criterionId>": { "score": 1-5, "note": "..." } } }`;
+{ "response": "..."${audio ? ', "candidateTranscript": "..."' : ""}, "progress": 0.0, "criteriaUpdate": { "<criterionId>": { "score": 1-5, "note": "..." } } }`;
 
   const parts = [{ text: prompt }];
   if (audio) parts.push({ inlineData: { mimeType: audio.mimeType, data: audio.base64 } });
@@ -169,6 +227,7 @@ Return ONLY valid JSON in this exact shape, no other text:
   }
   return {
     response: parsed.response,
+    progress: clampProgress(parsed.progress),
     criteriaUpdate: sanitizeCriteriaUpdate(parsed.criteriaUpdate),
     candidateTranscript: typeof parsed.candidateTranscript === "string" ? parsed.candidateTranscript.trim() : "",
   };
@@ -189,12 +248,14 @@ Criteria tracked so far this session: ${JSON.stringify(mergeCriteriaLog(criteria
 
 Analyze this whole window rather than one exchange — catch things a single
 turn's reasoning would miss, such as a long idle stretch with no turn sent at
-all, or drift that only shows up across several exchanges. Update whichever
-of these criteria you have real signal for (valid ids: ${VALID_CRITERIA_IDS}).
+all, or drift that only shows up across several exchanges. Rate progress
+DURING THIS WINDOW in "progress", from -1 (backwards, idle, or stuck) to +1
+(clear forward progress). Update whichever of these criteria you have real
+signal for (valid ids: ${VALID_CRITERIA_IDS}).
 ${GRADING_RUBRIC}
 
 Return ONLY valid JSON in this exact shape, no other text:
-{ "criteriaUpdate": { "<criterionId>": { "score": 1-5, "note": "..." } } }`;
+{ "progress": 0.0, "criteriaUpdate": { "<criterionId>": { "score": 1-5, "note": "..." } } }`;
 
   const data = await postGenerateContent(GEMINI_MODEL, {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -202,7 +263,7 @@ Return ONLY valid JSON in this exact shape, no other text:
   });
 
   const parsed = parseJsonResponse(extractText(data));
-  return { criteriaUpdate: sanitizeCriteriaUpdate(parsed.criteriaUpdate) };
+  return { progress: clampProgress(parsed.progress), criteriaUpdate: sanitizeCriteriaUpdate(parsed.criteriaUpdate) };
 }
 
 // End-of-session report. Merges the criteriaLog, local filler stats, and the
@@ -216,9 +277,8 @@ export async function callGeminiScorecard({
   criteriaLog,
   fillerStats,
   watchdogNudgeCount,
+  progressSeries = [],
 }) {
-  const criteriaList = CRITERIA_DEFINITIONS.map((c) => `- ${c.id}: ${c.label}`).join("\n");
-
   const prompt = `Given this full interview session:
 Problem:
 ${describeProblem(currentProblem)}
@@ -229,17 +289,21 @@ Full transcript: ${JSON.stringify(transcript)}
 Criteria history across the whole session, per-turn and per-checkpoint, chronological: ${JSON.stringify(criteriaLog)}
 Locally-measured filler-word stats (already computed, not yours to recompute): ${JSON.stringify(fillerStats)}
 Number of times the interviewer had to proactively step in because the candidate seemed stuck: ${watchdogNudgeCount}
+Trajectory over time — each point is (t in ms since the session started, progress from -1 to +1): ${JSON.stringify(progressSeries)}
 
-Produce a coaching scorecard. For each criterion below, give a final score out
-of 5 and a short note informed by how it evolved across the whole session
-(not just the last update):
-${criteriaList}
+Produce a coaching scorecard. For each criterion, give a final score out of 5
+and a short note that cites a concrete moment (a transcript quote, a code
+choice, a test result) and reflects how the criterion evolved across the whole
+session, not just the last update.
 ${GRADING_RUBRIC}
 
 Also produce a path narrative: a short account of which states the candidate
 moved through (understanding the problem, attempting an approach, getting
 stuck, receiving hints, adjusting or staying stuck, reaching a clean solution
-or running out of time) and where the friction was.
+or running out of time) and where the friction was. Read the shape of the
+trajectory array above — did they climb steadily, thrash, or drift the wrong
+way? Treat the filler rate as a soft coaching signal, never a penalty: it
+partly reflects nerves and speaking style, not competence.
 
 Assess correctness from the final test results, estimate the time and space
 complexity of the final code, and give a realistic hire/no-hire verdict with

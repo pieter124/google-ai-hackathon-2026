@@ -8,6 +8,12 @@ export const GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image";
 // Interviewer personas. `description` is the instruction fed to Gemini; the
 // rest (name, title, voice, avatar prompt) is what the candidate sees. All
 // portraits share one art direction so the setup grid looks like a single cast.
+//
+// `hintPosture` is a separate dial from tone: it sets how far up the hint
+// ladder this interviewer climbs unprompted once the Watchdog says the
+// candidate is stuck. "generous" starts helping earlier, "sparing" expects
+// them to drive first. See RESEARCH.md (assistance dilemma, hint ladder) for
+// why it isn't just folded into the persona text.
 const AVATAR_STYLE =
   "Flat vector illustration, minimal modern style, clean geometric shapes, centered head-and-shoulders portrait, " +
   "solid dark navy background, soft studio lighting, no text, no watermark.";
@@ -19,6 +25,7 @@ export const INTERVIEWERS = [
     title: "Senior Software Engineer",
     blurb: "Warm and encouraging — gives you room to think out loud.",
     voiceName: "en-US-Chirp3-HD-Aoede",
+    hintPosture: "generous",
     description:
       "a supportive, encouraging interviewer named Maya Chen, a Senior Software Engineer. You give the candidate room to think out loud, offer warmth when they're stuck, and favor escalating, non-bottom-out hints — start vague, and only get more concrete if they're still stuck after trying.",
     avatarPrompt:
@@ -30,6 +37,7 @@ export const INTERVIEWERS = [
     title: "Staff Engineer",
     blurb: "High bar, few pleasantries — pushes on edge cases and complexity.",
     voiceName: "en-US-Chirp3-HD-Orus",
+    hintPosture: "sparing",
     description:
       "a rigorous, high-bar interviewer named Victor Osei, a Staff Engineer. You push on edge cases, correctness, and complexity, rarely offer reassurance, and expect the candidate to drive the conversation — but still give escalating, non-bottom-out hints rather than the full solution when they're stuck.",
     avatarPrompt:
@@ -41,6 +49,7 @@ export const INTERVIEWERS = [
     title: "Engineering Manager",
     blurb: "Pragmatic and direct — cares about trade-offs and clean reasoning.",
     voiceName: "en-US-Chirp3-HD-Kore",
+    hintPosture: "sparing",
     description:
       "a pragmatic, direct interviewer named Priya Raghavan, an Engineering Manager. You care most about clear trade-off reasoning and structured communication: you interrupt rambling politely, ask 'why this approach over the alternative?', and expect the candidate to state assumptions and complexity unprompted. Hints are brief and Socratic, never the answer.",
     avatarPrompt:
@@ -52,6 +61,7 @@ export const INTERVIEWERS = [
     title: "Principal Engineer",
     blurb: "Calm pressure — silence, follow-ups, and 'what breaks at scale?'",
     voiceName: "en-US-Chirp3-HD-Charon",
+    hintPosture: "sparing",
     description:
       "a calm but intense interviewer named Erik Lindqvist, a Principal Engineer known for pressure-testing candidates. You speak sparingly, let silences hang, and follow nearly every answer with a harder follow-up: scale limits, failure modes, pathological inputs. You are fair but skeptical by default, and your hints are the smallest possible push — never more.",
     avatarPrompt:
@@ -75,11 +85,52 @@ export const SESSION_LENGTH_OPTIONS = [
 ];
 
 // Criteria schema shared by the live panel, every Gemini prompt, and the report.
+// Only `label` is rendered; the `definition` and 1/3/5 `anchors` go into every
+// scoring prompt, which is what keeps an LLM scorer from drifting between
+// turns (see RESEARCH.md). The dimension SET is unchanged — verification and
+// testing behavior is folded into codeQuality's anchors rather than split out,
+// so the live matrix stays four rows deep.
 export const CRITERIA_DEFINITIONS = [
-  { id: "problemUnderstanding", label: "Problem Understanding" },
-  { id: "communication", label: "Communication & Approach" },
-  { id: "codeQuality", label: "Code Quality & Correctness" },
-  { id: "complexityAwareness", label: "Complexity Awareness" },
+  {
+    id: "problemUnderstanding",
+    label: "Problem Understanding",
+    definition: "Decodes an ambiguous problem, clarifies assumptions, and structures an approach before coding.",
+    anchors: {
+      1: "No coherent plan; never reaches a viable path even with heavy hints",
+      3: "Reaches a working approach, but only after prompting; misses obvious sub-cases",
+      5: "Independently clarifies, decomposes, weighs multiple approaches, and drives to the optimal one unaided",
+    },
+  },
+  {
+    id: "communication",
+    label: "Communication & Approach",
+    definition: "Whether the interviewer can follow the reasoning in real time, and how well feedback is taken up.",
+    anchors: {
+      1: "Interviewer can't follow; silent or disorganized; ignores hints",
+      3: "Followable with effort; explains after the fact; integrates hints slowly",
+      5: "Narrates while working, asks sharp clarifying questions up front, explicitly uses feedback",
+    },
+  },
+  {
+    id: "codeQuality",
+    label: "Code Quality & Correctness",
+    definition: "Translates the approach into correct, clean, idiomatic code, and verifies it against edge cases.",
+    anchors: {
+      1: "Major logic or syntax errors; code doesn't run; no testing; ignores edge cases",
+      3: "Mostly working with minor bugs; not clean or idiomatic; tests the happy path only when prompted",
+      5: "Clean, correct, idiomatic; self-verifies unprompted and walks edge cases as a habit",
+    },
+  },
+  {
+    id: "complexityAwareness",
+    label: "Complexity Awareness",
+    definition: "Reasons about time and space complexity and compares design trade-offs.",
+    anchors: {
+      1: "Can't state complexity; unaware of trade-offs",
+      3: "States correct big-O when asked; sees one trade-off",
+      5: "Proactively analyzes complexity, compares alternatives, and optimizes with justification",
+    },
+  },
 ];
 
 // Problem selection weights. "google-hard" problems keep their own badge but

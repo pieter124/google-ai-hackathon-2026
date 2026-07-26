@@ -172,6 +172,7 @@ export default function InterviewScreen({
     const turn = await callGeminiInterviewTurn({
       currentProblem,
       personaDescription: interviewer.description,
+      hintPosture: interviewer.hintPosture,
       language: settings.language,
       code: codeRef.current,
       lastTestResults: lastTestResultsRef.current,
