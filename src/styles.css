@@ -677,6 +677,24 @@ select, input[type="text"] {
 .verdict-no-hire { border-color: rgba(255, 107, 107, 0.5); background: rgba(255, 107, 107, 0.08); }
 .verdict-no-hire .verdict-decision { color: var(--fail); }
 
+/* Trajectory sparkline on the scorecard. */
+.path-chart {
+  width: 100%;
+  height: auto;
+  margin: 4px 0 10px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.path-axis { stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 4; }
+.path-tick { fill: var(--text-muted); font-size: 9px; }
+.path-line { stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.path-line.up { stroke: var(--pass); }
+.path-line.down { stroke: var(--fail); }
+.path-dot.up { fill: var(--pass); }
+.path-dot.down { fill: var(--fail); }
+.path-narrative { color: var(--text); }
+
 .final-criteria-list { display: flex; flex-direction: column; gap: 14px; }
 .final-criteria-row { display: flex; flex-direction: column; gap: 4px; }
 .final-criteria-row .criteria-label { font-weight: 600; }

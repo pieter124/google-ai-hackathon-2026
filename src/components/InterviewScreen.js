@@ -117,6 +117,7 @@ export default function InterviewScreen({
   setTranscript,
   criteriaLog,
   setCriteriaLog,
+  setProgressSeries,
   watchdogNudgeCount,
   setWatchdogNudgeCount,
   onWrapUp,
@@ -128,6 +129,8 @@ export default function InterviewScreen({
   const [turnState, setTurnState] = useState("idle");
   const [voiceStatus, setVoiceStatus] = useState("starting"); // starting | listening | capturing | held | muted | unavailable
   const [muted, setMuted] = useState(false);
+  const [agentPaused, setAgentPaused] = useState(false);
+  const [hasSpokenLine, setHasSpokenLine] = useState(false); // enables Replay once there's something to replay
   const [textInputValue, setTextInputValue] = useState("");
   const [runningTests, setRunningTests] = useState(false);
   const [errorBanner, setErrorBanner] = useState(null); // { message, retry }
@@ -162,6 +165,12 @@ export default function InterviewScreen({
   const lastTurnSentAtRef = useRef(Date.now());
   const watchdogNudgeInFlightRef = useRef(false);
   const codeHistoryRef = useRef([]); // rolling { at, code } snapshots for thrash detection
+
+  // The <audio> element for the line playing right now (so it can be paused
+  // where it stands), and the base64 of the last line spoken (so Replay
+  // re-speaks that one utterance rather than re-running the turn).
+  const currentAudioRef = useRef(null);
+  const lastReplyAudioRef = useRef(null);
 
   // Phase bookkeeping. `lastCandidateActivityAtRef` deliberately tracks only
   // things the CANDIDATE did — unlike lastTurnSentAtRef, which also moves when
@@ -204,6 +213,13 @@ export default function InterviewScreen({
   // Anything the candidate did of their own accord: spoke, typed a message,
   // edited code, ran tests. Speaking during the approach phase is also what
   // arms the "they've explained it, let them code" transition.
+  // One point on the path chart. Time is relative to the start of the
+  // interview so the chart reads as "how far in", not wall clock.
+  function recordProgress(progress) {
+    if (typeof progress !== "number") return;
+    setProgressSeries((series) => [...series, { t: Date.now() - sessionStartRef.current, progress }]);
+  }
+
   function noteCandidateActivity() {
     lastCandidateActivityAtRef.current = Date.now();
     if (phaseRef.current === "approach") approachSpokeRef.current = true;
@@ -269,6 +285,8 @@ export default function InterviewScreen({
     setTranscript(transcriptWithReply);
     transcriptRef.current = transcriptWithReply;
 
+    recordProgress(turn.progress);
+
     if (Object.keys(turn.criteriaUpdate).length > 0) {
       const entry = { timestamp: Date.now(), source: "turn", criteriaUpdate: turn.criteriaUpdate };
       const nextLog = [...criteriaLogRef.current, entry];
@@ -277,16 +295,23 @@ export default function InterviewScreen({
     }
     lastTurnSentAtRef.current = Date.now();
 
-    // Stash the stop handle so barge-in or Skip can cut playback short.
+    // Stash the stop handle so barge-in or Skip can cut playback short, and
+    // the element itself so Pause can hold it mid-sentence.
     // Re-check voice-over in case it was toggled off during synthesis.
     if (base64Audio && voiceOverOnRef.current) {
+      lastReplyAudioRef.current = base64Audio; // enables Replay
+      setHasSpokenLine(true);
       setTurnState("speaking");
-      const { getLevel, finished, stop } = prepareAudioPlayback(base64Audio, "audio/mp3");
+      setAgentPaused(false);
+      const { audio, getLevel, finished, stop } = prepareAudioPlayback(base64Audio, "audio/mp3");
+      currentAudioRef.current = audio;
       stopPlaybackRef.current = stop;
       setActiveLevelSource(() => getLevel); // wrapped: bare fn would be treated as an updater
       await finished;
+      currentAudioRef.current = null;
       stopPlaybackRef.current = null;
       setActiveLevelSource(null);
+      setAgentPaused(false);
     }
     return turn;
   }
@@ -478,6 +503,45 @@ export default function InterviewScreen({
     if (stopPlaybackRef.current) stopPlaybackRef.current();
   }
 
+  // Hold the interviewer mid-sentence — for taking a note, or re-reading the
+  // problem without them talking over you. Distinct from Skip, which abandons
+  // the rest of the line. The turn stays in "speaking" while paused, which is
+  // deliberate: the mic keeps its hold, so pausing doesn't turn into the app
+  // recording you with the reply half-delivered.
+  function handleTogglePause() {
+    const audio = currentAudioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      audio.play().catch(() => {});
+      setAgentPaused(false);
+    } else {
+      audio.pause();
+      setAgentPaused(true);
+    }
+  }
+
+  // Say that last line again. Faithful and free next to asking the interviewer
+  // to repeat themselves — it replays the exact audio instead of spending a
+  // turn on a paraphrase that won't match what they actually said.
+  function handleReplayLast() {
+    if (!lastReplyAudioRef.current || turnState !== "idle" || errorBanner) return;
+    unlockAudioContext();
+    enqueueTurn(async () => {
+      setTurnState("speaking");
+      setAgentPaused(false);
+      const { audio, getLevel, finished, stop } = prepareAudioPlayback(lastReplyAudioRef.current, "audio/mp3");
+      currentAudioRef.current = audio;
+      stopPlaybackRef.current = stop;
+      setActiveLevelSource(() => getLevel);
+      await finished;
+      currentAudioRef.current = null;
+      stopPlaybackRef.current = null;
+      setActiveLevelSource(null);
+      setAgentPaused(false);
+      setTurnState("idle");
+    });
+  }
+
   // Session countdown — auto-wraps-up at zero, same flow as the manual button.
   useEffect(() => {
     const interval = setInterval(() => {
@@ -611,7 +675,7 @@ export default function InterviewScreen({
       checkpointInFlightRef.current = true;
 
       try {
-        const { criteriaUpdate } = await callGeminiCheckpoint({
+        const { progress, criteriaUpdate } = await callGeminiCheckpoint({
           currentProblem,
           language: settings.language,
           code: codeRef.current,
@@ -621,6 +685,7 @@ export default function InterviewScreen({
             : "The candidate edited their code since the last checkpoint.",
           criteriaLog: criteriaLogRef.current,
         });
+        recordProgress(progress);
         if (Object.keys(criteriaUpdate).length > 0) {
           const entry = { timestamp: Date.now(), source: "checkpoint", criteriaUpdate };
           const nextLog = [...criteriaLogRef.current, entry];
@@ -723,6 +788,26 @@ export default function InterviewScreen({
       h(
         "div",
         { className: "topbar-side topbar-right" },
+        turnState === "speaking"
+          ? h(
+              "button",
+              {
+                className: `btn btn-small${agentPaused ? " toggle-on" : ""}`,
+                onClick: handleTogglePause,
+                "aria-pressed": agentPaused,
+              },
+              agentPaused ? "▶ Resume" : "⏸ Pause"
+            )
+          : h(
+              "button",
+              {
+                className: "btn btn-small",
+                onClick: handleReplayLast,
+                disabled: !hasSpokenLine || turnState !== "idle" || !!errorBanner,
+                title: "Replay the interviewer's last line",
+              },
+              "↺ Replay"
+            ),
         voiceStatus !== "unavailable" &&
           h(
             "button",

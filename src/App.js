@@ -21,6 +21,11 @@ export default function App() {
   // Shared log the interviewer, aggregator and watchdog all append criteria
   // updates to; also drives the live CriteriaMatrix.
   const [criteriaLog, setCriteriaLog] = useState([]);
+  // { t, progress } points, t measured from the start of the interview. Agent
+  // 1 contributes one per turn and Agent 2 one per checkpoint; the scorecard
+  // draws them as the candidate's path and hands the raw series to the report
+  // call so the narrative describes the same curve the candidate is looking at.
+  const [progressSeries, setProgressSeries] = useState([]);
   const [watchdogNudgeCount, setWatchdogNudgeCount] = useState(0);
   const [scorecard, setScorecard] = useState(null);
   const [scorecardError, setScorecardError] = useState(null);
@@ -36,6 +41,7 @@ export default function App() {
     setLastTestResults([]);
     setTranscript([]);
     setCriteriaLog([]);
+    setProgressSeries([]);
     setWatchdogNudgeCount(0);
     setScorecard(null);
     setScorecardError(null);
@@ -56,6 +62,7 @@ export default function App() {
         criteriaLog,
         fillerStats,
         watchdogNudgeCount: finalWatchdogNudgeCount,
+        progressSeries,
       });
       setScorecard(result);
       setView("scorecard");
@@ -76,6 +83,7 @@ export default function App() {
     setLastTestResults([]);
     setTranscript([]);
     setCriteriaLog([]);
+    setProgressSeries([]);
     setWatchdogNudgeCount(0);
     setScorecard(null);
     setScorecardError(null);
@@ -97,6 +105,7 @@ export default function App() {
       setTranscript,
       criteriaLog,
       setCriteriaLog,
+      setProgressSeries,
       watchdogNudgeCount,
       setWatchdogNudgeCount,
       onWrapUp: handleWrapUp,
@@ -131,6 +140,7 @@ export default function App() {
     lastTestResults,
     fillerStats,
     watchdogNudgeCount,
+    progressSeries,
     onRestart: handleRestart,
   });
 }

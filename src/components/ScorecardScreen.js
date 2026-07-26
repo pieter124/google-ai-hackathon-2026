@@ -1,6 +1,7 @@
 import { h } from "../reactRuntime.js";
 import { CRITERIA_DEFINITIONS, getInterviewer, LANGUAGE_OPTIONS } from "../config.js";
 import { ScoreDots } from "./CriteriaMatrix.js";
+import PathChart from "./PathChart.js";
 
 function labelFor(id) {
   const def = CRITERIA_DEFINITIONS.find((c) => c.id === id);
@@ -21,6 +22,7 @@ export default function ScorecardScreen({
   lastTestResults,
   fillerStats,
   watchdogNudgeCount,
+  progressSeries,
   onRestart,
 }) {
   const interviewer = getInterviewer(settings.interviewerId);
@@ -104,8 +106,9 @@ export default function ScorecardScreen({
       h(
         "div",
         { className: "scorecard-block" },
-        h("h3", null, "Path narrative"),
-        h("p", null, scorecard.pathNarrative)
+        h("h3", null, "Your path to the solution"),
+        h(PathChart, { series: progressSeries }),
+        h("p", { className: "path-narrative" }, scorecard.pathNarrative)
       ),
 
       h(
