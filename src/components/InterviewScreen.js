@@ -13,6 +13,20 @@ import { speechToText, textToSpeech } from "../api/speechClient.js";
 import { callGeminiInterviewTurn, callGeminiCheckpoint } from "../api/geminiClient.js";
 
 const FILLER_WINDOW_MS = 90000; // how far back the Watchdog reads speech for its filler check
+const READING_MS = 180000; // 3-minute "read the problem" phase at the start
+const APPROACH_SILENCE_MS = 13000; // after the candidate explains their approach, wait this long then ask them to code
+
+// Scripted phase-transition directives sent to the interviewer as `latestEvent`
+// so the model phrases them in its own persona/voice. Mirrors a real interview:
+// read → explain approach → implement → (get unstuck).
+const PHASE_EVENTS = {
+  opening:
+    "The interview is just starting. Greet the candidate briefly in character, then tell them they have 3 minutes to read the problem and its constraints and to ask any clarifying questions. Do NOT discuss the solution yet.",
+  approach:
+    "The 3-minute reading time is up. Ask the candidate to walk you through their approach — how they'd implement this — BEFORE writing any code. If they haven't asked a clarifying question, gently invite one.",
+  implement:
+    "The candidate has explained their approach. Briefly acknowledge it, then ask them to go ahead and start implementing it in code now.",
+};
 
 function formatClock(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -40,8 +54,12 @@ export default function InterviewScreen({
   const [textInputValue, setTextInputValue] = useState("");
   const [runningTests, setRunningTests] = useState(false);
   const [errorBanner, setErrorBanner] = useState(null); // { message, retry }
-  const [caption, setCaption] = useState("Take a moment to read the problem, then click the mic and introduce your approach.");
+  const [caption, setCaption] = useState("Tip: asking clarifying questions early is a strong signal in interviews.");
   const [remainingMs, setRemainingMs] = useState(settings.sessionLength * 60000);
+  // Interview phase: reading (3-min timer) → approach (explain out loud) →
+  // implementing (code, with stuck-detection). Drives what the agents do.
+  const [phase, setPhase] = useState("reading");
+  const [phaseMsLeft, setPhaseMsLeft] = useState(READING_MS);
   // Live, on-screen rubric scores — merged last-write-wins from every turn's
   // and checkpoint's criteriaUpdate. `liveCriteriaRef` mirrors it so the
   // agent calls can pass current scores as prompt context without re-render.
@@ -105,6 +123,15 @@ export default function InterviewScreen({
   const checkpointInFlightRef = useRef(false);
   const wrappedRef = useRef(false);
 
+  // Phase machine bookkeeping.
+  const phaseRef = useRef(phase);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+  const approachSpokeRef = useRef(false); // candidate has explained their approach at least once
+  const approachStartRef = useRef(0); // when the approach phase began (fallback auto-advance)
+  const readingStartRef = useRef(Date.now());
+  const openedRef = useRef(false); // opening line fired once
+  const codeHistoryRef = useRef([]); // recent { t, code } snapshots for thrash detection
+
   const interviewer = resolveInterviewer(settings.interviewerId);
 
   // Python: kick off the ~10MB Pyodide download when the session starts (so
@@ -130,6 +157,7 @@ export default function InterviewScreen({
       setTranscript(transcriptSoFar);
       transcriptRef.current = transcriptSoFar;
       logRef.current.logTurn({ role: "candidate", text: candidateEntryText });
+      if (phaseRef.current === "approach") approachSpokeRef.current = true;
     }
 
     let turn;
@@ -194,6 +222,21 @@ export default function InterviewScreen({
     lastActivityRef.current = Date.now();
     if (typed) lastCodeChangeRef.current = Date.now();
   }
+
+  // Fires a proactive interviewer turn (phase transition or stuck-hint) that
+  // the candidate didn't trigger. Serialized via nudgeInFlightRef so two can't
+  // overlap. Only touches stable refs/setters, so it's safe to capture in a
+  // mount-once timer.
+  function fireAgentTurn(latestEvent, source = "turn") {
+    if (nudgeInFlightRef.current || micStateRef.current !== "idle") return;
+    nudgeInFlightRef.current = true;
+    setMicState("processing");
+    latestRunTurnRef.current(latestEvent, null, source)
+      .catch(() => {})
+      .finally(() => { nudgeInFlightRef.current = false; });
+  }
+  const latestFireRef = useRef(fireAgentTurn);
+  latestFireRef.current = fireAgentTurn;
 
   // --- Voice controls --------------------------------------------------
   // Mute the candidate's own input. If muted mid-recording, drop the take.
@@ -265,6 +308,37 @@ export default function InterviewScreen({
   }, [settings.sessionLength]);
 
   // -----------------------------------------------------------------------
+  // Opening line — fires once when the interview mounts: greet + announce the
+  // 3-minute reading window. The reading countdown starts now.
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    if (openedRef.current) return;
+    openedRef.current = true;
+    readingStartRef.current = Date.now();
+    const t = setTimeout(() => latestFireRef.current(PHASE_EVENTS.opening), 600);
+    return () => clearTimeout(t);
+  }, []);
+
+  // -----------------------------------------------------------------------
+  // Reading-phase countdown (3 min). At zero, move to the approach phase and
+  // have the interviewer ask how they'd implement it.
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    if (phase !== "reading") return;
+    const id = setInterval(() => {
+      const left = READING_MS - (Date.now() - readingStartRef.current);
+      setPhaseMsLeft(Math.max(0, left));
+      if (left <= 0) {
+        clearInterval(id);
+        approachStartRef.current = Date.now();
+        setPhase("approach");
+        latestFireRef.current(PHASE_EVENTS.approach);
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [phase]);
+
+  // -----------------------------------------------------------------------
   // AGENT 2 — Aggregator. Independent timer; analyzes the window since the
   // last checkpoint and logs a progress signal + note. Best-effort: any error
   // is swallowed so it can never disturb the live loop.
@@ -303,19 +377,48 @@ export default function InterviewScreen({
   }, [currentProblem]);
 
   // -----------------------------------------------------------------------
-  // AGENT 3 — Watchdog. Fires on the fast cadence: snapshots keystrokes every
-  // tick (the "3-second keystroke log"), then checks two research-backed stuck
-  // patterns and nudges once past threshold, respecting a cooldown.
-  //   A) silent + idle: no typing AND no turn for silentIdleMs.
-  //   B) talking without progress: high filler ratio AND not coding.
+  // AGENT 3 — Watchdog + phase driver. Fires on the fast cadence: snapshots
+  // keystrokes every tick (the "3-second keystroke log"), then acts by phase:
+  //   • reading    → nothing (they're reading; the countdown drives the move).
+  //   • approach   → once they've explained and gone quiet ~13s, ask them to
+  //                  start implementing.
+  //   • implementing → nudge on a sustained stuck pattern, respecting cooldown:
+  //       A) silent + idle: no typing AND no turn for silentIdleMs;
+  //       B) talking without progress: high filler ratio AND not coding;
+  //       C) thrashing: actively editing but churning the same lines with no
+  //          net progress (delete-and-retype, reverting to an earlier state).
   // -----------------------------------------------------------------------
   useEffect(() => {
     const id = setInterval(() => {
       const log = logRef.current;
-      log.logKeystrokeSnapshot({ chars: codeRef.current.length });
+      const code = codeRef.current;
+      log.logKeystrokeSnapshot({ chars: code.length });
+
+      const now = Date.now();
+      // Keep a ~30s window of code snapshots for thrash detection.
+      codeHistoryRef.current.push({ t: now, code });
+      codeHistoryRef.current = codeHistoryRef.current.filter((h) => h.t >= now - 30000);
 
       if (wrappedRef.current || nudgeInFlightRef.current || micStateRef.current !== "idle" || errorBannerRef.current || runningTestsRef.current) return;
-      const now = Date.now();
+
+      const currentPhase = phaseRef.current;
+      if (currentPhase === "reading") return; // reading window; let them read
+
+      if (currentPhase === "approach") {
+        // Move on to coding when they've explained and gone quiet, OR they've
+        // already started typing code, OR as a fallback after ~75s so we can
+        // never get wedged waiting.
+        const explainedThenQuiet = approachSpokeRef.current && now - lastActivityRef.current > APPROACH_SILENCE_MS;
+        const startedTyping = now - lastCodeChangeRef.current < 4000;
+        const waitedTooLong = now - approachStartRef.current > 75000;
+        if (explainedThenQuiet || startedTyping || waitedTooLong) {
+          setPhase("implementing");
+          latestFireRef.current(PHASE_EVENTS.implement);
+        }
+        return;
+      }
+
+      // --- implementing phase: stuck detection ---
       if (now - lastNudgeRef.current < WATCHDOG.minCooldownMs) return;
       if (remainingMsRef.current < 15000) return; // don't nudge in the last few seconds
 
@@ -326,22 +429,41 @@ export default function InterviewScreen({
         recentSpeech.split(/\s+/).length >= 12 &&
         recentFillerRatio(recentSpeech) > WATCHDOG.fillerRatioThreshold &&
         notCoding;
+      const thrashing = detectThrash(now);
 
-      if (!silentIdle && !fillerNoProgress) return;
+      if (!silentIdle && !fillerNoProgress && !thrashing) return;
 
-      const reason = silentIdle ? "candidate is silent and idle (no typing, no turn)" : "candidate is talking with lots of filler but not making progress";
+      const reason = silentIdle
+        ? "candidate is silent and idle (no typing, no turn)"
+        : thrashing
+          ? "candidate is churning the same code with no net progress (looks stuck)"
+          : "candidate is talking with lots of filler but not making progress";
       nudgeInFlightRef.current = true;
       lastNudgeRef.current = now;
       log.logNudge({ reason, text: "" });
       setHintsUsed((n) => n + 1);
       setMicState("processing");
-      latestRunTurnRef.current(`proactive nudge — ${reason}`, null, "nudge")
+      latestRunTurnRef.current(`proactive nudge — ${reason}. Offer one concrete escalating hint in character ("could you try…?"), not the full solution.`, null, "nudge")
         .catch(() => {})
         .finally(() => { nudgeInFlightRef.current = false; });
     }, WATCHDOG.checkEveryMs);
     return () => clearInterval(id);
     // Mount once; all volatile reads go through refs above.
   }, []);
+
+  // Thrash = actively editing recently, but over the last ~20s the code churns
+  // without net growth and keeps returning to an earlier state (delete/retype
+  // the same lines) — a classic "stuck" signal distinct from plain idleness.
+  function detectThrash(now) {
+    const hist = codeHistoryRef.current.filter((h) => h.t >= now - 20000);
+    if (hist.length < 4) return false;
+    const editingRecently = now - lastCodeChangeRef.current < 6000;
+    const first = hist[0].code;
+    const last = hist[hist.length - 1].code;
+    const netChange = Math.abs(last.length - first.length);
+    const revertedToEarlier = hist.slice(0, -1).some((h) => h.code === last && h.code.trim() !== "");
+    return editingRecently && netChange <= 4 && revertedToEarlier;
+  }
 
   // -----------------------------------------------------------------------
   // TRIGGER 1 — voice (push to talk)
@@ -454,6 +576,10 @@ export default function InterviewScreen({
       h(
         "div",
         { className: "header-right" },
+        phase === "reading" &&
+          h("span", { className: "phase-pill reading" }, `📖 Read the problem · ${formatClock(phaseMsLeft)}`),
+        phase === "approach" && h("span", { className: "phase-pill" }, "🗣 Explain your approach"),
+        phase === "implementing" && h("span", { className: "phase-pill" }, "💻 Implement"),
         h("span", { className: `session-timer ${lowTime ? "low" : ""}` }, formatClock(remainingMs)),
         h("button", { className: "btn btn-wrapup", onClick: wrapUp }, "Wrap up")
       )

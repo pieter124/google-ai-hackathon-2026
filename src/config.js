@@ -138,7 +138,7 @@ export const AGGREGATOR_INTERVAL_MS = 120000; // windowed analysis every ~2 min 
 // See RESEARCH.md for citations.
 export const WATCHDOG = {
   checkEveryMs: 3000, // re-evaluate heuristics every 3s (also the keystroke-snapshot cadence)
-  silentIdleMs: 35000, // no typing AND no turn sent this long → intervene (30-45s "hard idle" band; below this is protected think-time)
+  silentIdleMs: 25000, // no typing AND no turn sent this long (while coding) → intervene
   fillerRatioThreshold: 0.28, // filler fraction in recent speech that reads as "talking without progress"
   minCooldownMs: 75000, // one nudge per ~75s max (research: ~60-90s between hint-ladder steps), so it can't spam
 };

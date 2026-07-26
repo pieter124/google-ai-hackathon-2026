@@ -169,6 +169,16 @@ input[type="text"] { font-family: var(--sans); }
 .problem-header { display: flex; align-items: center; gap: 10px; }
 .problem-header h2 { margin: 0; font-size: 18px; }
 .header-right { display: flex; align-items: center; gap: 14px; }
+.phase-pill {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--text-muted);
+}
+.phase-pill.reading { border-color: var(--accent); color: var(--accent); background: rgba(91, 140, 255, 0.12); }
 .session-timer { font-family: var(--mono); font-size: 20px; font-weight: 700; letter-spacing: 0.02em; }
 .session-timer.low { color: var(--warn); animation: pulse-warn 1.5s ease-in-out infinite; }
 @keyframes pulse-warn { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
