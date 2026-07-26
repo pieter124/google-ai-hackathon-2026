@@ -183,7 +183,7 @@ transferred by analogy from adjacent fields rather than measured on technical in
 | --- | --- | --- |
 | **Aayan** | Frontend | UI and the initial prototype |
 | **Pieter** | Product Manager | Led the app design and UX decisions, and early project planning |
-| **Sali** | AI Integration | Wiring the app up to Gemini |
+| **Sali** | Concept & AI Agent Design | Original concept for the product.<br>Designed how the three agents *behave*, not just how they're called: the anchored 1/3/5 scoring rubric and communication-as-a-cap rule, the interviewer's hint-ladder pedagogy and per-persona hint posture, and the three-phase session flow (read → explain approach → implement).<br>Built the Watchdog's wheel-spinning detection — the stuck pattern a plain idle timer can't see — plus the −1..+1 trajectory signal and the scorecard's path chart it draws.<br>Voice controls (pause / replay), and the fairness framing on the filler-word stats.<br>Grounded the rubric anchors and Watchdog thresholds in the literature — see [`RESEARCH.md`](./RESEARCH.md). |
 | **Vedika** | Frontend | UI and the initial prototype |
 | **Yurii** | Backend | AI integration and text-to-speech |
 
