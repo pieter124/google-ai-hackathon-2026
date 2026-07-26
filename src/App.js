@@ -22,7 +22,6 @@ export default function App() {
   const [code, setCode] = useState("");
   const [lastTestResults, setLastTestResults] = useState([]);
   const [transcript, setTranscript] = useState([]);
-  const [interviewerImpressions, setInterviewerImpressions] = useState(""); // never shown to the candidate
   const [hintsUsed, setHintsUsed] = useState(0);
   const [scorecard, setScorecard] = useState(null);
   const [reportError, setReportError] = useState(null);
@@ -40,7 +39,6 @@ export default function App() {
     setCode(problem.starterCode);
     setLastTestResults([]);
     setTranscript([]);
-    setInterviewerImpressions("");
     setHintsUsed(0);
     setScorecard(null);
     setReportError(null);
@@ -59,7 +57,7 @@ export default function App() {
         code,
         lastTestResults,
         transcript,
-        interviewerImpressions,
+        criteriaLog: analysis.criteriaLog,
         hintsUsed: analysis.hintsUsed,
         fillerStats: analysis.fillerStats,
         progressSeries: analysis.progressSeries,
@@ -78,7 +76,6 @@ export default function App() {
     setCode("");
     setLastTestResults([]);
     setTranscript([]);
-    setInterviewerImpressions("");
     setHintsUsed(0);
     setScorecard(null);
     setReportError(null);
@@ -105,8 +102,6 @@ export default function App() {
       setLastTestResults,
       transcript,
       setTranscript,
-      interviewerImpressions,
-      setInterviewerImpressions,
       hintsUsed,
       setHintsUsed,
       onWrapUp: generateReport,

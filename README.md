@@ -38,8 +38,20 @@ The key must be restricted (Google Cloud Console) to exactly the three APIs used
   keystrokes every 3s and proactively nudges on a sustained stuck pattern
   (silent+idle, or filler-talk without progress).
 
-All three write to one timestamped `utils/sessionLog.js`; the end-of-session
-report merges the signals into 1–5 rubric scores + a path narrative.
+Every turn and checkpoint also emits sanitized 1–5 updates for the five rubric
+dimensions, shown live in the **Criteria Matrix** on the right rail (so scoring
+is visible during the interview, not just at the end). All three agents write to
+one timestamped `utils/sessionLog.js`; the end-of-session report merges the
+signals into authoritative 1–5 rubric scores, an SVG **path curve**, and a
+verdict.
 
 See [`RESEARCH.md`](./RESEARCH.md) for the citations behind the rubric anchors,
 interviewer behavior, and watchdog thresholds.
+
+## Run modes
+
+This branch (`Sali`) is **client-only and zero-setup** — matches the spec's
+no-backend design and runs on any static server (above). The `main` branch also
+ships an optional Express + Google **ADC** proxy (`server/`) that keeps the key
+server-side; adopt that for a hardened/deployed build (it needs Node + `gcloud`
+auth). For the demo, the client-only mode is the fast path.

@@ -1,6 +1,7 @@
 import { getApiKey, GEMINI_MODEL, RUBRIC } from "../config.js";
 
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const VALID_CRITERIA_IDS = RUBRIC.map((c) => c.id).join(", ");
 
 // fetch() has no built-in timeout; without one, a stalled request would leave
 // the "Thinking..." spinner stuck forever, violating "never leave the UI
@@ -62,17 +63,31 @@ function clampProgress(v) {
   return Math.max(-1, Math.min(1, n));
 }
 
+// Keeps only recognized rubric ids with a valid 1-5 score, so a model
+// hallucinating an unknown id or a malformed score can't corrupt the live
+// criteria matrix. (Pattern adopted from the team's `main` branch.)
+function sanitizeCriteriaUpdate(raw) {
+  const validIds = new Set(RUBRIC.map((c) => c.id));
+  const clean = {};
+  for (const [id, value] of Object.entries(raw || {})) {
+    const score = Math.round(Number(value?.score));
+    if (validIds.has(id) && Number.isFinite(score) && score >= 1 && score <= 5) {
+      clean[id] = { score, note: typeof value?.note === "string" ? value.note : "" };
+    }
+  }
+  return clean;
+}
+
 // ---------------------------------------------------------------------------
 // AGENT 1 — Interviewer (per turn). Drives the in-character interviewer for
-// all triggers (voice turn, run-code, watchdog nudge). Sends the full session
-// state plus a one-line description of what just happened, which is what keeps
-// persona/impressions consistent regardless of which trigger fired.
-//
-// Returns, alongside the reply: updated private impressions, and `progress` —
-// a -1..+1 read of whether the candidate just moved toward (+) or away from
-// (-) a good solution. That signal is what the path chart is built from, so we
-// get the trajectory "for free" on every turn instead of reconstructing it at
-// the end.
+// all triggers (voice turn, run-code, watchdog nudge). Returns the reply plus
+// two live signals:
+//   • progress: -1..+1 trajectory (feeds the path chart);
+//   • criteriaUpdate: partial 1-5 scores for whichever rubric dimensions this
+//     turn gave real signal on (feeds the live Criteria Matrix).
+// The running merged criteria are passed back in as context so scores evolve
+// coherently instead of resetting each turn — this replaces the old hidden
+// "impressions" blob with something the candidate can actually see.
 // ---------------------------------------------------------------------------
 export async function callGeminiInterviewTurn({
   currentProblem,
@@ -82,7 +97,7 @@ export async function callGeminiInterviewTurn({
   code,
   lastTestResults,
   transcript,
-  interviewerImpressions,
+  liveCriteria,
   latestEvent,
 }) {
   const prompt = `You are acting as a coding interviewer with this persona: ${personaDescription}
@@ -94,7 +109,7 @@ Candidate's current code:
 ${code}
 
 Most recent test results (if any): ${JSON.stringify(lastTestResults)}
-Your private notes on the candidate so far (never reveal these): ${interviewerImpressions || "(none yet)"}
+Criteria scored so far this session (1-5, higher is better; ids missing haven't been scored yet): ${JSON.stringify(liveCriteria || {})}
 Full transcript so far: ${JSON.stringify(transcript)}
 Latest event: ${latestEvent}
 
@@ -112,12 +127,13 @@ through what you have"), (1) point at where to look, (2) name the technique,
 (3) the concrete next step — and NEVER volunteer the near-answer bottom-out
 hint unless time is nearly up. Don't rush to fill a short silence.
 
-Then update your private impressions, and rate the candidate's CURRENT
-trajectory from -1 (moving away from a correct/optimal solution) through 0
-(treading water) to +1 (clearly closing in on a good solution).
+Then rate the candidate's CURRENT trajectory from -1 (moving away from a
+correct/optimal solution) through 0 (treading water) to +1 (closing in), and
+update whichever of these criteria you now have real signal for (valid ids:
+${VALID_CRITERIA_IDS}) — leave others out if this turn didn't touch them.
 
 Return ONLY valid JSON in this exact shape, no other text:
-{ "response": "...", "updatedImpressions": "...", "progress": 0.0 }`;
+{ "response": "...", "progress": 0.0, "criteriaUpdate": { "<criterionId>": { "score": 1-5, "note": "..." } } }`;
 
   const parsed = await generateJson(prompt, { temperature: 0.8 });
   if (typeof parsed.response !== "string") {
@@ -125,43 +141,49 @@ Return ONLY valid JSON in this exact shape, no other text:
   }
   return {
     response: parsed.response,
-    updatedImpressions: typeof parsed.updatedImpressions === "string" ? parsed.updatedImpressions : interviewerImpressions,
     progress: clampProgress(parsed.progress),
+    criteriaUpdate: sanitizeCriteriaUpdate(parsed.criteriaUpdate),
   };
 }
 
 // ---------------------------------------------------------------------------
 // AGENT 2 — Aggregator (periodic checkpoint). Fires on a timer, independent of
-// turns. Gets the transcript slice + code + keystroke-activity summary for the
-// window since the last checkpoint and returns a windowed progress read + a
-// short note. This is what captures long idle stretches that no turn covered —
-// the whole reason it exists alongside the per-turn signal. Cheap, low
+// turns. Analyzes the window since the last checkpoint — including idle
+// stretches no turn covered — and returns a windowed progress read + note (for
+// the path chart) plus criteria updates (for the live matrix). Cheap, low
 // temperature, short timeout: it must never block the live loop.
 // ---------------------------------------------------------------------------
-export async function callGeminiCheckpoint({ currentProblem, code, windowTranscript, keystrokeSummary }) {
-  const prompt = `You are silently monitoring a live coding interview (the candidate cannot see this).
+export async function callGeminiCheckpoint({ currentProblem, code, windowTranscript, keystrokeSummary, liveCriteria }) {
+  const prompt = `You are silently monitoring a live coding interview (the candidate cannot see this note, but they can see the criteria scores).
 Problem: ${currentProblem.title} — ${currentProblem.description}
 Candidate's current code:
 ${code}
 What they said in the last few minutes: ${windowTranscript || "(nothing said this window)"}
 Typing activity this window: ${keystrokeSummary}
+Criteria scored so far this session: ${JSON.stringify(liveCriteria || {})}
 
-In one sentence, note how this window went (progress, being stuck, going in
-circles, idle). Then rate progress DURING THIS WINDOW from -1 (going backwards
-/ idle / stuck) to +1 (clear forward progress).
+Analyze this whole window rather than one exchange (catch drift or a long idle
+stretch a single turn would miss). In one sentence, note how it went. Rate
+progress DURING THIS WINDOW from -1 (backwards/idle/stuck) to +1 (clear
+progress). Update whichever criteria you have real signal for (valid ids:
+${VALID_CRITERIA_IDS}).
 
-Return ONLY valid JSON: { "note": "...", "progress": 0.0 }`;
+Return ONLY valid JSON: { "note": "...", "progress": 0.0, "criteriaUpdate": { "<criterionId>": { "score": 1-5, "note": "..." } } }`;
 
   const parsed = await generateJson(prompt, { temperature: 0.3, timeoutMs: 15000 });
-  return { note: typeof parsed.note === "string" ? parsed.note : "", progress: clampProgress(parsed.progress) };
+  return {
+    note: typeof parsed.note === "string" ? parsed.note : "",
+    progress: clampProgress(parsed.progress),
+    criteriaUpdate: sanitizeCriteriaUpdate(parsed.criteriaUpdate),
+  };
 }
 
 // ---------------------------------------------------------------------------
-// END-OF-SESSION REPORT. Reads the merged signals (per-turn criteria +
-// Aggregator checkpoints + filler stats + path series), NOT raw audio, and
-// produces the structured coaching report: a 1-5 score per rubric dimension,
-// a path narrative, filler-aware communication notes, and a verdict. The
-// rubric is injected from config so scoring criteria live in one place.
+// END-OF-SESSION REPORT. Reads the merged signals (the whole criteria log +
+// filler stats + path series), NOT raw audio, and produces the authoritative
+// coaching report: a 1-5 score per rubric dimension, a path narrative, and a
+// verdict. The rubric is injected from config so scoring criteria live in one
+// place.
 // ---------------------------------------------------------------------------
 const RUBRIC_SPEC = RUBRIC.map(
   (d) => `- ${d.id} ("${d.label}"): ${d.definition} [1 = ${d.anchors[1]}; 3 = ${d.anchors[3]}; 5 = ${d.anchors[5]}]`
@@ -172,7 +194,7 @@ export async function callGeminiReport({
   code,
   lastTestResults,
   transcript,
-  interviewerImpressions,
+  criteriaLog,
   hintsUsed,
   fillerStats,
   progressSeries,
@@ -183,13 +205,14 @@ Problem: ${currentProblem.title} — ${currentProblem.description}
 Final code: ${code}
 Final test results: ${JSON.stringify(lastTestResults)}
 Full transcript: ${JSON.stringify(transcript)}
-Interviewer's private impressions built up live: ${interviewerImpressions || "(none)"}
-Windowed checkpoint notes from the session: ${JSON.stringify(checkpointNotes)}
-Hints used: ${hintsUsed}
+Criteria history across the whole session (chronological per-turn and per-checkpoint updates): ${JSON.stringify(criteriaLog)}
+Windowed checkpoint notes: ${JSON.stringify(checkpointNotes)}
+Hints/nudges used: ${hintsUsed}
 Measured speech fillers (local count, not your estimate): ${fillerStats.fillers} filler words of ${fillerStats.total} spoken (${(fillerStats.ratio * 100).toFixed(0)}%)
 Progress trajectory over time (t in ms, -1..1): ${JSON.stringify(progressSeries)}
 
-Rubric — score EACH dimension 1-5 using these anchors:
+Rubric — score EACH dimension 1-5 using these anchors and how it evolved across
+the whole session (not just the last update):
 ${RUBRIC_SPEC}
 
 For each dimension give an integer score 1-5 and a one-sentence rationale that

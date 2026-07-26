@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, h } from "../reactRuntime.js";
 import CodeEditor from "./CodeEditor.js";
 import Avatar from "./Avatar.js";
+import CriteriaMatrix from "./CriteriaMatrix.js";
 import { resolveInterviewer, WATCHDOG, AGGREGATOR_INTERVAL_MS } from "../config.js";
 import { runAllTests } from "../utils/sandbox.js";
 import { createVoiceRecorder } from "../utils/voiceRecorder.js";
@@ -26,8 +27,6 @@ export default function InterviewScreen({
   setLastTestResults,
   transcript,
   setTranscript,
-  interviewerImpressions,
-  setInterviewerImpressions,
   hintsUsed,
   setHintsUsed,
   onWrapUp,
@@ -39,6 +38,19 @@ export default function InterviewScreen({
   const [errorBanner, setErrorBanner] = useState(null); // { message, retry }
   const [caption, setCaption] = useState("Take a moment to read the problem, then click the mic and introduce your approach.");
   const [remainingMs, setRemainingMs] = useState(settings.sessionLength * 60000);
+  // Live, on-screen rubric scores — merged last-write-wins from every turn's
+  // and checkpoint's criteriaUpdate. `liveCriteriaRef` mirrors it so the
+  // agent calls can pass current scores as prompt context without re-render.
+  const [liveCriteria, setLiveCriteria] = useState({});
+  const liveCriteriaRef = useRef({});
+  function mergeCriteria(update) {
+    if (!update || !Object.keys(update).length) return;
+    setLiveCriteria((prev) => {
+      const next = { ...prev, ...update };
+      liveCriteriaRef.current = next;
+      return next;
+    });
+  }
 
   // --- Refs that mirror fast-changing state so async callbacks (voice
   // pipeline, agent timers) never read stale values. ---
@@ -50,8 +62,6 @@ export default function InterviewScreen({
   useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
   const hintsUsedRef = useRef(hintsUsed);
   useEffect(() => { hintsUsedRef.current = hintsUsed; }, [hintsUsed]);
-  const impressionsRef = useRef(interviewerImpressions);
-  useEffect(() => { impressionsRef.current = interviewerImpressions; }, [interviewerImpressions]);
 
   // Volatile UI state the Watchdog reads on its own timer. Mirrored into refs
   // so the Watchdog interval can be created ONCE on mount — depending on these
@@ -111,7 +121,7 @@ export default function InterviewScreen({
         code: codeRef.current,
         lastTestResults: lastTestResultsRef.current,
         transcript: transcriptSoFar,
-        interviewerImpressions: impressionsRef.current,
+        liveCriteria: liveCriteriaRef.current,
         latestEvent,
       });
     } catch (err) {
@@ -130,10 +140,9 @@ export default function InterviewScreen({
     const transcriptWithReply = [...transcriptSoFar, { role: "interviewer", text: turn.response }];
     setTranscript(transcriptWithReply);
     transcriptRef.current = transcriptWithReply;
-    setInterviewerImpressions(turn.updatedImpressions);
-    impressionsRef.current = turn.updatedImpressions;
+    mergeCriteria(turn.criteriaUpdate);
     setCaption(turn.response);
-    logRef.current.logTurn({ role: "interviewer", text: turn.response, progress: turn.progress, source });
+    logRef.current.logTurn({ role: "interviewer", text: turn.response, progress: turn.progress, criteriaUpdate: turn.criteriaUpdate, source });
 
     // Speak the reply — soft-fail: the text is already the caption, so a TTS
     // hiccup or blocked autoplay must never strand the UI.
@@ -170,6 +179,7 @@ export default function InterviewScreen({
       hintsUsed: hintsUsedRef.current,
       progressSeries: log.progressSeries(),
       checkpointNotes: log.all().filter((e) => e.kind === "checkpoint").map((e) => e.note),
+      criteriaLog: log.criteriaLog(),
       fillerStats: analyzeFillers(log.candidateSpeechSince(-1)),
     });
   }
@@ -214,8 +224,10 @@ export default function InterviewScreen({
           code: codeRef.current,
           windowTranscript,
           keystrokeSummary,
+          liveCriteria: liveCriteriaRef.current,
         });
         log.logCheckpoint(cp);
+        mergeCriteria(cp.criteriaUpdate);
         lastCheckpointTRef.current = log.now();
         charsAtCheckpointRef.current = codeRef.current.length;
       } catch (err) {
@@ -349,7 +361,14 @@ export default function InterviewScreen({
     "div",
     { className: "screen interview-screen" },
 
-    h(Avatar, { state: micState, amplitudeRef, caption }),
+    // Right rail: interviewer avatar + captions, with the live criteria matrix
+    // beneath it (ported from `main`, unified on our rubric).
+    h(
+      "div",
+      { className: "right-rail" },
+      h(Avatar, { state: micState, amplitudeRef, caption }),
+      h(CriteriaMatrix, { liveCriteria })
+    ),
 
     errorBanner &&
       h(
