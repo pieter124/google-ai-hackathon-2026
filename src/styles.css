@@ -278,6 +278,23 @@ select, input[type="text"] {
 .topbar-right { justify-content: flex-end; }
 .brand { font-weight: 700; font-size: 14.5px; letter-spacing: -0.01em; white-space: nowrap; }
 
+.topbar-center { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+/* Which stage of the interview you're in: read → explain → implement. */
+.phase-pill {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--text-muted);
+}
+.phase-reading { color: var(--accent); border-color: rgba(91, 140, 255, 0.5); background: rgba(91, 140, 255, 0.12); }
+.phase-approach { color: var(--purple); border-color: rgba(180, 140, 255, 0.5); background: rgba(180, 140, 255, 0.12); }
+.phase-implementing { color: var(--pass); border-color: rgba(62, 207, 142, 0.45); background: rgba(62, 207, 142, 0.1); }
+
 .session-countdown {
   font-family: var(--mono);
   font-size: 15px;

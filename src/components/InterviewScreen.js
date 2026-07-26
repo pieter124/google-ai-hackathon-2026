@@ -26,6 +26,38 @@ const BARGE_IN_SUSTAIN_MS = 600;
 // Mic threshold multiplier while the reply plays, so echo can't trigger capture.
 const BARGE_IN_THRESHOLD_BOOST = 2.5;
 
+// A real interview isn't one undifferentiated block — you get a few minutes
+// with the problem, you talk through a plan, and only then do you write code.
+// The session walks those three phases in order, which is also the talk-ratio
+// U-curve from RESEARCH.md: chatty at the top, near-silent while coding.
+const READING_PHASE_MS = 3 * 60 * 1000;
+// Once they've explained their approach and gone quiet for this long, take it
+// as "done explaining" and move them to the keyboard.
+const APPROACH_SILENCE_MS = 13000;
+// ...and if they never quite land it, move on anyway rather than stall here.
+const APPROACH_MAX_MS = 75000;
+// Recently-typed means they've already started coding, so the approach phase
+// has effectively ended whether or not they narrated it.
+const APPROACH_TYPING_GRACE_MS = 4000;
+
+// Phase transitions are described to Agent 1 as ordinary `latestEvent` text
+// rather than canned lines, so each interviewer delivers them in their own
+// voice instead of all four sounding like the same script.
+const PHASE_EVENTS = {
+  opening:
+    "session started — greet the candidate briefly and introduce yourself in character (name and role). Then set up the task in your own words: two or three spoken sentences capturing what the problem asks — do NOT read the full problem statement aloud, it's already on their screen — plus one quick example spoken naturally so they hear what goes in and what comes out. Then tell them they have 3 minutes to read the problem and its constraints and to ask any clarifying questions, and that you'll ask for their approach after that. Do NOT discuss the solution or an approach yet. A bit longer than a normal turn is fine; keep it well under 30 seconds of speech.",
+  approach:
+    "the 3-minute reading window is up — ask the candidate to walk you through how they'd approach this, out loud, before they write any code. If they haven't asked a clarifying question yet, invite one",
+  implement:
+    "the candidate has explained their approach — acknowledge it briefly and ask them to start implementing it in code now",
+};
+
+const PHASE_PILLS = {
+  reading: { className: "phase-reading", label: "Read the problem" },
+  approach: { className: "phase-approach", label: "Explain your approach" },
+  implementing: { className: "phase-implementing", label: "Implement" },
+};
+
 function formatCountdown(totalSeconds) {
   const m = Math.floor(totalSeconds / 60);
   const s = totalSeconds % 60;
@@ -101,6 +133,8 @@ export default function InterviewScreen({
   const voiceOverOnRef = useRef(true);
   useEffect(() => { voiceOverOnRef.current = voiceOverOn; }, [voiceOverOn]);
   const [pyStatus, setPyStatus] = useState(getPythonStatus());
+  const [phase, setPhase] = useState("reading"); // reading | approach | implementing
+  const [readingSecondsLeft, setReadingSecondsLeft] = useState(Math.round(READING_PHASE_MS / 1000));
 
   // Refs mirror state so async callbacks never read stale values.
   const codeRef = useRef(code);
@@ -120,6 +154,17 @@ export default function InterviewScreen({
   const lastCodeChangeAtRef = useRef(Date.now());
   const lastTurnSentAtRef = useRef(Date.now());
   const watchdogNudgeInFlightRef = useRef(false);
+
+  // Phase bookkeeping. `lastCandidateActivityAtRef` deliberately tracks only
+  // things the CANDIDATE did — unlike lastTurnSentAtRef, which also moves when
+  // the interviewer speaks unprompted, and so can't answer "have they gone
+  // quiet since explaining?".
+  const phaseRef = useRef(phase);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+  const readingStartedAtRef = useRef(Date.now());
+  const approachStartedAtRef = useRef(0);
+  const approachSpokeRef = useRef(false);
+  const lastCandidateActivityAtRef = useRef(Date.now());
 
   const sessionStartRef = useRef(Date.now());
   const wrappedUpRef = useRef(false);
@@ -148,6 +193,14 @@ export default function InterviewScreen({
     // eslint-disable-next-line
   }, []);
 
+  // Anything the candidate did of their own accord: spoke, typed a message,
+  // edited code, ran tests. Speaking during the approach phase is also what
+  // arms the "they've explained it, let them code" transition.
+  function noteCandidateActivity() {
+    lastCandidateActivityAtRef.current = Date.now();
+    if (phaseRef.current === "approach") approachSpokeRef.current = true;
+  }
+
   // Turn mutex: one turn at a time, in trigger order. Each job handles its own errors.
   const turnChainRef = useRef(Promise.resolve());
   function enqueueTurn(job) {
@@ -167,12 +220,14 @@ export default function InterviewScreen({
     if (candidateEntryText) {
       setTranscript(transcriptSoFar);
       transcriptRef.current = transcriptSoFar;
+      noteCandidateActivity();
     }
 
     const turn = await callGeminiInterviewTurn({
       currentProblem,
       personaDescription: interviewer.description,
       hintPosture: interviewer.hintPosture,
+      phase: phaseRef.current,
       language: settings.language,
       code: codeRef.current,
       lastTestResults: lastTestResultsRef.current,
@@ -188,6 +243,7 @@ export default function InterviewScreen({
       const withCandidate = [...transcriptRef.current, { role: "candidate", text: turn.candidateTranscript }];
       setTranscript(withCandidate);
       transcriptRef.current = withCandidate;
+      noteCandidateActivity();
     }
 
     // Synthesize before revealing the reply so text and voice start together;
@@ -253,16 +309,35 @@ export default function InterviewScreen({
     });
   }
 
-  // Greeting — open with the interviewer, not dead air.
+  // Greeting — open with the interviewer, not dead air. This also starts the
+  // reading clock, so the 3 minutes begin when the candidate first sees the
+  // problem rather than when the component mounted.
   useEffect(() => {
-    sendTurn({
-      latestEvent:
-        "session started — greet the candidate briefly and introduce yourself in character (name and role). Then set up the task in your own words: two or three spoken sentences capturing what the problem asks — do NOT read the full problem statement aloud, it's already on their screen — plus one quick example spoken naturally so they hear what goes in and what comes out. Close by asking if they have any questions before they start. A bit longer than a normal turn is fine; keep it well under 30 seconds of speech.",
-      candidateEntryText: null,
-      audio: null,
-    });
+    readingStartedAtRef.current = Date.now();
+    sendTurn({ latestEvent: PHASE_EVENTS.opening, candidateEntryText: null, audio: null });
     // eslint-disable-next-line
   }, []);
+
+  // Reading phase — count the three minutes down in the top bar, then hand
+  // over to the approach phase. The transition is enqueued like any other
+  // turn, so it waits its turn instead of talking over a question the
+  // candidate is part-way through asking.
+  useEffect(() => {
+    if (phase !== "reading") return;
+    const interval = setInterval(() => {
+      const remaining = READING_PHASE_MS - (Date.now() - readingStartedAtRef.current);
+      setReadingSecondsLeft(Math.max(0, Math.ceil(remaining / 1000)));
+      if (remaining <= 0) {
+        clearInterval(interval);
+        approachStartedAtRef.current = Date.now();
+        setPhase("approach");
+        phaseRef.current = "approach";
+        sendTurn({ latestEvent: PHASE_EVENTS.approach, candidateEntryText: null, audio: null }, { soft: true });
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line
+  }, [phase]);
 
   // Hands-free voice loop: the mic listens all session; each utterance goes to
   // Gemini as raw audio (with STT fallback). Detection is held while the floor
@@ -412,12 +487,37 @@ export default function InterviewScreen({
 
   // Watchdog: background monitor of typing activity, time since the last turn,
   // and recent filler-word ratio. Fires a proactive nudge when a threshold trips.
+  //
+  // It also drives the phase machine past the approach stage — deciding
+  // "they've finished explaining" reads the same activity signals as deciding
+  // "they've gone quiet", so it belongs on the same timer.
   useEffect(() => {
     const interval = setInterval(() => {
       if (turnStateRef.current !== "idle" || errorBannerRef.current || watchdogNudgeInFlightRef.current) return;
 
       const now = Date.now();
-      // Cadence cap first: never check in unless a full silence window has
+      // Reading time is theirs — silence here is the candidate doing exactly
+      // what they were asked to do, so no check-in fires at all.
+      if (phaseRef.current === "reading") return;
+
+      // The approach phase has its own, much shorter clock: it ends when
+      // they've explained and gone quiet, or they've already started typing,
+      // or they've had long enough either way. It runs ahead of the cadence
+      // cap below so the handoff isn't stuck waiting a full silence window.
+      if (phaseRef.current === "approach") {
+        const explainedThenQuiet =
+          approachSpokeRef.current && now - lastCandidateActivityAtRef.current > APPROACH_SILENCE_MS;
+        const alreadyCoding = now - lastCodeChangeAtRef.current < APPROACH_TYPING_GRACE_MS;
+        const waitedLongEnough = now - approachStartedAtRef.current > APPROACH_MAX_MS;
+        if (explainedThenQuiet || alreadyCoding || waitedLongEnough) {
+          setPhase("implementing");
+          phaseRef.current = "implementing";
+          sendTurn({ latestEvent: PHASE_EVENTS.implement, candidateEntryText: null, audio: null }, { soft: true });
+        }
+        return;
+      }
+
+      // Cadence cap: never check in unless a full silence window has
       // passed since the last turn. Everything below only picks the tone.
       if (now - lastTurnSentAtRef.current <= WATCHDOG_CHECKIN_SILENCE_MS) return;
       const typingRecently = now - lastCodeChangeAtRef.current < WATCHDOG_CHECKIN_SILENCE_MS;
@@ -521,6 +621,7 @@ export default function InterviewScreen({
   // Run code — tests run immediately; the interviewer's reaction queues as a turn.
   async function handleRunCode() {
     if (runningTests || errorBanner) return;
+    noteCandidateActivity();
     setRunningTests(true);
     const results = await runAllTests(codeRef.current, currentProblem.testCases, settings.language);
     setLastTestResults(results);
@@ -551,6 +652,7 @@ export default function InterviewScreen({
     return { className: "pill-idle", label: "Listening — just talk" };
   })();
 
+  const phasePill = PHASE_PILLS[phase] || PHASE_PILLS.implementing;
   const passedCount = lastTestResults.filter((t) => t.passed).length;
   const countdownClass =
     secondsLeft <= COUNTDOWN_DANGER_SECONDS ? " danger" : secondsLeft <= COUNTDOWN_WARN_SECONDS ? " warn" : "";
@@ -568,7 +670,16 @@ export default function InterviewScreen({
         h("span", { className: "brand" }, "Mock Interview Agent"),
         h("span", { className: `badge badge-${currentProblem.difficulty}` }, currentProblem.difficulty)
       ),
-      h("div", { className: `session-countdown${countdownClass}` }, formatCountdown(secondsLeft)),
+      h(
+        "div",
+        { className: "topbar-center" },
+        h(
+          "span",
+          { className: `phase-pill ${phasePill.className}` },
+          phase === "reading" ? `${phasePill.label} · ${formatCountdown(readingSecondsLeft)}` : phasePill.label
+        ),
+        h("div", { className: `session-countdown${countdownClass}` }, formatCountdown(secondsLeft))
+      ),
       h(
         "div",
         { className: "topbar-side topbar-right" },
@@ -651,6 +762,7 @@ export default function InterviewScreen({
           onChange: (next) => {
             setCode(next);
             lastCodeChangeAtRef.current = Date.now();
+            noteCandidateActivity();
           },
         }),
 
