@@ -20,9 +20,18 @@
 html, body {
   margin: 0;
   height: 100%;
-  background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
+  /* Two very faint accent glows over the flat fill — enough to stop the
+     interview and scorecard screens reading as a solid slab, not enough to
+     compete with anything on top of them. Fixed so scrolling the scorecard
+     doesn't drag the light around with it. The setup screen paints its own
+     opaque gradient and covers this. */
+  background:
+    radial-gradient(900px 600px at 12% -5%, rgba(91, 140, 255, 0.10), transparent 60%),
+    radial-gradient(800px 600px at 100% 105%, rgba(62, 207, 142, 0.06), transparent 55%),
+    var(--bg);
+  background-attachment: fixed;
 }
 
 #root { min-height: 100%; }
@@ -116,6 +125,7 @@ select, input[type="text"] {
   padding: 40px;
   max-width: 660px;
   width: 100%;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
 }
 .setup-card h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -0.02em; }
 .subtitle { color: var(--text-muted); margin: 0 0 24px; line-height: 1.55; }
@@ -653,6 +663,7 @@ select, input[type="text"] {
   display: flex;
   flex-direction: column;
   gap: 22px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
 }
 .scorecard-header h1 { margin: 0; font-size: 24px; }
 .scorecard-context { margin: 6px 0 0; color: var(--text-muted); font-size: 14px; }
